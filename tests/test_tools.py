@@ -384,6 +384,36 @@ check("ficheiro-sentinela pede encerramento ordenado", _parou)
 check("ficheiro-sentinela é limpo depois de lido", not _resta)
 _main.STOP_FILE.unlink(missing_ok=True)
 
+# --- permissões dadas por fora (painel de controlo) -------------------------
+# O painel escreve na tabela `access` a partir de outro processo; o bot tem de
+# apanhar a alteração sozinho, sem ser reiniciado.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "windows"))
+import acessos  # noqa: E402
+
+
+async def _cenario_acesso_externo():
+    _main.ACCESS_REFRESH_SECONDS = 0.5
+    tarefa = asyncio.create_task(_main.watch_access_list())
+
+    conexao = acessos.ligar()  # ligação própria, como a do painel
+    acessos.adicionar(conexao, 777, "Painel")
+    conexao.close()
+
+    antes = 777 in bot.autorizados()
+    await asyncio.sleep(1.5)
+    depois = 777 in bot.autorizados()
+    tarefa.cancel()
+    return antes, depois
+
+
+_antes, _depois = asyncio.run(_cenario_acesso_externo())
+check("a escrita do painel ainda não está na cache", not _antes)
+check("o bot relê a lista sozinho", _depois)
+passou, _ = _porteiro_deixa_passar(777)
+check("quem foi autorizado no painel entra sem reiniciar o bot", passou)
+db.revoke_access(777)
+bot.refresh_access_cache()
+
 # --- encerramento -----------------------------------------------------------
 scheduler.shutdown(wait=True)
 db.close_db()
