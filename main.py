@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 
 from telegram import BotCommand, Update
 from telegram.error import InvalidToken, NetworkError, TimedOut
@@ -40,12 +41,29 @@ BOT_COMMANDS = [
 
 
 def setup_logging() -> None:
-    """Configura o logging da aplicação."""
+    """Configura o logging para a consola e, opcionalmente, para ficheiro."""
+    handlers: list[logging.Handler] = []
+
+    # Com `pythonw.exe` (execução sem janela) o stdout não existe: nesse caso
+    # o ficheiro de registo é a única saída possível.
+    if sys.stdout is not None:
+        handlers.append(logging.StreamHandler(sys.stdout))
+
+    if settings.log_file:
+        handlers.append(
+            RotatingFileHandler(
+                settings.log_file,
+                maxBytes=5_000_000,  # 5 MB por ficheiro
+                backupCount=3,       # mantém 3 ficheiros antigos
+                encoding="utf-8",
+            )
+        )
+
     logging.basicConfig(
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         level=getattr(logging, settings.log_level, logging.INFO),
-        stream=sys.stdout,
+        handlers=handlers or [logging.NullHandler()],
     )
     # Estas bibliotecas são muito faladoras em DEBUG.
     logging.getLogger("httpx").setLevel(logging.WARNING)

@@ -60,6 +60,7 @@ class Settings:
     connect_timeout: float
     read_timeout: float
     log_level: str
+    log_file: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -86,6 +87,9 @@ class Settings:
             connect_timeout=float(_get_int("CONNECT_TIMEOUT", 20)),
             read_timeout=float(_get_int("READ_TIMEOUT", 30)),
             log_level=_get_str("LOG_LEVEL", "INFO").upper(),
+            # Ficheiro de registo. Indispensável quando o bot corre sem janela:
+            # é a única forma de ver o que se passou.
+            log_file=_get_str("LOG_FILE", ""),
         )
 
     @property
