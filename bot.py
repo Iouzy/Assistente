@@ -15,6 +15,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
+from typing import Optional
 
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
@@ -31,6 +32,8 @@ from telegram.ext import (
 
 import database as db
 import llm
+import safety
+import scheduler
 import tools
 from config import settings
 from llm import AssistantError
@@ -87,7 +90,7 @@ HELP = (
     "🧹 /forget — clear our recent chat from my short-term memory\n"
     "🪪 /who — your Telegram id and who else has access\n"
     "❓ /help — this message\n\n"
-    "*Sharing*\n"
+    "*Sharing* (owner only)\n"
     "`/allow <id> [name]` lets someone else in · `/revoke <id>` takes it back\n\n"
     "_The buttons answer straight from the database, so they're free._"
 )
@@ -97,9 +100,23 @@ HELP = (
 # Controlo de acesso
 #
 # Um bot de Telegram é público: qualquer pessoa que descubra o seu username
-# pode escrever-lhe. Os dados estão isolados por `user_id` — um estranho nunca
-# veria a agenda de outra pessoa — mas cada mensagem dele gastaria saldo da
-# API. `ALLOWED_USER_IDS` fecha a porta.
+# pode escrever-lhe. O porteiro é a única coisa entre isso e os dados.
+#
+# Três regras, todas deliberadas:
+#
+#   1. **Silêncio absoluto.** Quem não está na lista não recebe resposta
+#      nenhuma — nem sequer uma recusa. Uma recusa confirma que o bot existe,
+#      que está ligado e que tem dono; e é uma mensagem que qualquer estranho
+#      podia mandar o bot enviar as vezes que quisesse.
+#   2. **Nada de reclamar o bot pela conversa.** Só o dono autoriza ids novos.
+#      A lista arranca vazia e vazia continua até alguém a preencher pelo
+#      `.env` ou pelo painel de controlo.
+#   3. **Na dúvida, fechado.** Uma actualização sem utilizador identificável
+#      (uma publicação num canal, por exemplo) é descartada, não deixada
+#      passar. Era esta a porta das traseiras: `effective_user` vem a None nos
+#      canais e o porteiro devolvia o controlo em vez de interromper, pelo que
+#      qualquer pessoa que metesse o bot num canal seu ficava com os comandos
+#      todos à mão — incluindo o `/allow`.
 # ---------------------------------------------------------------------------
 # Cache em memória da lista da base de dados: o porteiro corre em cada
 # actualização e não vale a pena tocar no disco de cada vez.
@@ -120,63 +137,45 @@ def autorizados() -> set[int]:
     return _acesso_cache
 
 
+def tem_acesso(user_id: Optional[int]) -> bool:
+    """Única resposta à pergunta «esta pessoa pode usar o bot?»."""
+    return user_id is not None and user_id in autorizados()
+
+
+def e_dono(user_id: int) -> bool:
+    """True se for o dono. Com a lista fixa no `.env` não há dono: ninguém
+    pode alterar a lista a partir do Telegram, e é isso que interessa."""
+    if settings.allowed_user_ids:
+        return False
+    return db.is_owner(user_id)
+
+
 async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Corre antes de tudo o resto; interrompe o processamento a estranhos."""
+    """Corre antes de tudo o resto; descarta em silêncio o que não é de casa."""
     user = update.effective_user
+
     if user is None:
+        # Sem remetente não há forma de autorizar seja o que for. Publicações
+        # em canais, mensagens anónimas e afins acabam aqui.
+        chat = update.effective_chat
+        logger.warning(
+            "Actualização sem utilizador descartada (chat %s, tipo %s).",
+            getattr(chat, "id", "?"),
+            getattr(chat, "type", "?"),
+        )
+        raise ApplicationHandlerStop
+
+    if tem_acesso(user.id):
         return
 
-    # O `.env` tem a última palavra, se estiver preenchido.
-    if settings.allowed_user_ids:
-        if user.id in settings.allowed_user_ids:
-            return
-    else:
-        permitidos = _acesso_cache
-        if not permitidos:
-            # Ninguém reclamou o bot ainda: o primeiro a falar fica dono. É a
-            # forma de fechar o bot sem obrigar a caçar ids nos registos.
-            await asyncio.to_thread(
-                db.grant_access, user.id, user.first_name or "", True
-            )
-            refresh_access_cache()
-            logger.warning(
-                "Bot reclamado por %s (id %s, @%s) — passa a ser privado.",
-                user.first_name or "?",
-                user.id,
-                user.username or "sem username",
-            )
-            chat = update.effective_chat
-            if chat is not None:
-                await send_text(
-                    context.bot,
-                    chat.id,
-                    "🔒 *This assistant is now yours.*\n\n"
-                    f"You're registered as the owner (id `{user.id}`) and nobody "
-                    "else can talk to me.\n\n"
-                    "_Use_ `/allow <id>` _to let someone else in, or_ `/who` "
-                    "_to see the list._",
-                )
-            return
-        if user.id in permitidos:
-            return
-
+    # Nem resposta, nem base de dados tocada: só uma linha no registo, com o
+    # id à vista para o dono o poder autorizar se quiser.
     logger.warning(
-        "Acesso recusado a %s (id %s, @%s).",
-        user.first_name or "?",
+        "Acesso recusado a %s (id %s, @%s) — sem resposta.",
+        safety.para_registo(user.first_name or "?", safety.MAX_NOME),
         user.id,
-        user.username or "sem username",
+        safety.para_registo(user.username or "sem username", safety.MAX_NOME),
     )
-    chat = update.effective_chat
-    if chat is not None:
-        try:
-            await context.bot.send_message(
-                chat_id=chat.id,
-                text="This is a private assistant and you're not on its list. 🔒",
-            )
-        except Exception:  # noqa: BLE001 — o aviso é best-effort
-            logger.debug("Não foi possível avisar o utilizador não autorizado.")
-
-    # Impede que qualquer outro handler veja esta actualização.
     raise ApplicationHandlerStop
 
 
@@ -184,27 +183,48 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # Utilitários
 # ---------------------------------------------------------------------------
 def _context_from(update: Update) -> ToolContext:
-    """Extrai o utilizador e o chat da actualização recebida."""
+    """Extrai o utilizador e o chat da actualização recebida.
+
+    O nome é limpo aqui porque vai parar ao prompt de sistema: é escolhido
+    pela própria pessoa e sem isto podia levar mudanças de linha — ou seja,
+    instruções novas — lá para dentro.
+    """
     user = update.effective_user
     chat = update.effective_chat
     return ToolContext(
         user_id=user.id if user else 0,
         chat_id=chat.id if chat else 0,
-        first_name=(user.first_name if user else "") or "",
+        first_name=safety.limpar_nome(user.first_name if user else ""),
     )
+
+
+def _comprimento_telegram(texto: str) -> int:
+    """Comprimento como o Telegram o conta: unidades UTF-16, não caracteres.
+
+    Um emoji fora do plano básico ocupa duas unidades. Contar caracteres do
+    Python deixava passar blocos com o dobro do tamanho permitido, e a
+    mensagem era recusada — o que, nas listas de notas, bastava para partir o
+    `/notes` de quem usasse emojis.
+    """
+    return len(texto.encode("utf-16-le")) // 2
 
 
 def _split_message(text: str) -> list[str]:
     """Parte respostas longas em blocos aceites pelo Telegram."""
-    if len(text) <= TELEGRAM_MAX_LENGTH:
+    if _comprimento_telegram(text) <= TELEGRAM_MAX_LENGTH:
         return [text]
 
     blocks: list[str] = []
     remaining = text
-    while len(remaining) > TELEGRAM_MAX_LENGTH:
-        cut = remaining.rfind("\n", 0, TELEGRAM_MAX_LENGTH)
+    while _comprimento_telegram(remaining) > TELEGRAM_MAX_LENGTH:
+        # Procuramos o maior prefixo que caiba, medido em unidades UTF-16.
+        limite = TELEGRAM_MAX_LENGTH
+        while _comprimento_telegram(remaining[:limite]) > TELEGRAM_MAX_LENGTH:
+            limite -= (_comprimento_telegram(remaining[:limite]) - TELEGRAM_MAX_LENGTH + 1) // 2 or 1
+
+        cut = remaining.rfind("\n", 0, limite)
         if cut <= 0:
-            cut = TELEGRAM_MAX_LENGTH
+            cut = limite
         blocks.append(remaining[:cut])
         remaining = remaining[cut:].lstrip("\n")
     if remaining:
@@ -216,7 +236,10 @@ async def send_text(bot, chat_id: int, text: str, reply_markup=None) -> None:
     """Envia texto tentando Markdown e caindo para texto simples se falhar.
 
     O modelo pode gerar asteriscos ou underscores desemparelhados, o que faz o
-    Telegram rejeitar a mensagem — nesse caso reenviamos sem formatação.
+    Telegram rejeitar a mensagem — nesse caso reenviamos sem formatação. O
+    reenvio também pode falhar (o `BadRequest` cobre outros motivos além da
+    formatação), por isso vai igualmente protegido: não enviar uma mensagem
+    nunca pode derrubar o handler que a estava a compor.
     """
     blocks = _split_message(text)
     for indice, block in enumerate(blocks):
@@ -228,7 +251,15 @@ async def send_text(bot, chat_id: int, text: str, reply_markup=None) -> None:
             )
         except BadRequest as exc:
             logger.debug("Markdown rejeitado (%s); a reenviar em texto simples.", exc)
-            await bot.send_message(chat_id=chat_id, text=block, reply_markup=markup)
+            try:
+                await bot.send_message(chat_id=chat_id, text=block, reply_markup=markup)
+            except BadRequest:
+                logger.warning(
+                    "Não foi possível enviar um bloco de %d caracteres para o chat %s.",
+                    len(block),
+                    chat_id,
+                    exc_info=True,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -373,14 +404,37 @@ async def cmd_who(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if entradas:
             linhas.append("*Access list*")
             for entrada in entradas:
-                etiqueta = entrada["label"] or "unnamed"
+                # A etiqueta foi escrita por outra pessoa: escapada, senão um
+                # nome como `[toca aqui](https://falso)` chegava ao dono como
+                # um link a sério, com a credibilidade do bot por trás.
+                etiqueta = safety.neutralizar_markdown(entrada["label"] or "unnamed")
                 marca = " 👑 owner" if entrada["is_owner"] else ""
                 linhas.append(f"• `{entrada['user_id']}` — {etiqueta}{marca}")
-            linhas.append("\n_Use_ `/allow <id> [name]` _or_ `/revoke <id>`_._")
+            if e_dono(ctx.user_id):
+                linhas.append("\n_Use_ `/allow <id> [name]` _or_ `/revoke <id>`_._")
         else:
-            linhas.append("⚠️ *Nobody has claimed this bot yet — it's open to anyone.*")
+            linhas.append(
+                "⚠️ *Nobody is authorised yet.*\n"
+                "_Add the first id from the Windows panel («Utilizadores») or "
+                "set_ `ALLOWED_USER_IDS` _in the .env file._"
+            )
 
     await send_text(context.bot, ctx.chat_id, "\n".join(linhas))
+
+
+async def _recusar_se_nao_for_dono(ctx: ToolContext, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Devolve True (e explica-se) se quem chamou não for o dono."""
+    if e_dono(ctx.user_id):
+        return False
+    await send_text(
+        context.bot,
+        ctx.chat_id,
+        "Only the owner can change who has access. 🔒",
+    )
+    logger.warning(
+        "Utilizador %s tentou gerir acessos sem ser dono.", ctx.user_id
+    )
+    return True
 
 
 async def cmd_allow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -396,29 +450,35 @@ async def cmd_allow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    if await _recusar_se_nao_for_dono(ctx, context):
+        return
+
     if not context.args:
         await send_text(
             context.bot,
             ctx.chat_id,
             "Usage: `/allow <telegram id> [name]`\n\n"
             "_They can find their id by sending_ `/who` _to any bot that shows it — "
-            "or just have them message me once and read the id from the logs._",
+            "or have them message me once and read the id from the logs._",
         )
         return
 
     try:
         novo_id = int(context.args[0])
     except ValueError:
-        await send_text(context.bot, ctx.chat_id, f"`{context.args[0]}` is not a numeric id.")
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            f"`{safety.neutralizar_markdown(context.args[0])}` is not a numeric id.",
+        )
         return
 
-    etiqueta = " ".join(context.args[1:]).strip()
+    etiqueta = safety.limitar(" ".join(context.args[1:]), safety.MAX_ETIQUETA)
     await asyncio.to_thread(db.grant_access, novo_id, etiqueta, False)
     refresh_access_cache()
     logger.info("Utilizador %s autorizado por %s.", novo_id, ctx.user_id)
-    await send_text(
-        context.bot, ctx.chat_id, f"✅ `{novo_id}`{f' ({etiqueta})' if etiqueta else ''} can now talk to me."
-    )
+    sufixo = f" ({safety.neutralizar_markdown(etiqueta)})" if etiqueta else ""
+    await send_text(context.bot, ctx.chat_id, f"✅ `{novo_id}`{sufixo} can now talk to me.")
 
 
 async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -434,6 +494,9 @@ async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
 
+    if await _recusar_se_nao_for_dono(ctx, context):
+        return
+
     if not context.args:
         await send_text(context.bot, ctx.chat_id, "Usage: `/revoke <telegram id>`")
         return
@@ -441,12 +504,25 @@ async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         alvo = int(context.args[0])
     except ValueError:
-        await send_text(context.bot, ctx.chat_id, f"`{context.args[0]}` is not a numeric id.")
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            f"`{safety.neutralizar_markdown(context.args[0])}` is not a numeric id.",
+        )
         return
 
+    # Os jobs já agendados têm de sair do scheduler à mão; a base de dados
+    # marca os lembretes como disparados, mas o job vive noutro sítio.
+    pendentes = await asyncio.to_thread(db.pending_reminder_ids, alvo)
     removido = await asyncio.to_thread(db.revoke_access, alvo)
     refresh_access_cache()
     if removido:
+        for reminder_id in pendentes:
+            scheduler.cancel_reminder(reminder_id)
+        logger.info(
+            "Acesso retirado a %s por %s (%d lembrete(s) cancelado(s)).",
+            alvo, ctx.user_id, len(pendentes),
+        )
         await send_text(context.bot, ctx.chat_id, f"✅ `{alvo}` can no longer talk to me.")
     else:
         await send_text(
@@ -470,7 +546,9 @@ _BUTTON_ROUTES = {
 
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Trata um toque no menu como se fosse o comando correspondente."""
-    handler = _BUTTON_ROUTES.get((update.message.text or "").strip())
+    if not update.message or not update.message.text:
+        return
+    handler = _BUTTON_ROUTES.get(update.message.text.strip())
     if handler is not None:
         await handler(update, context)
 
@@ -485,7 +563,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     ctx = _context_from(update)
     texto = update.message.text.strip()
-    logger.info("Mensagem de %s (%s): %s", ctx.first_name, ctx.user_id, texto)
+    # O corpo da mensagem só vai para o registo se LOG_MESSAGES estiver ligado:
+    # o ficheiro fica em claro no disco e as notas guardam justamente códigos e
+    # palavras-passe. Mesmo aí vai saneado — sem isto, uma mensagem com
+    # mudanças de linha escrevia linhas inteiras falsas no `assistente.log`.
+    if settings.log_messages:
+        logger.info(
+            "Mensagem de %s (%s): %s",
+            safety.para_registo(ctx.first_name, safety.MAX_NOME),
+            ctx.user_id,
+            safety.para_registo(texto),
+        )
+    else:
+        logger.info("Mensagem de %s (%d caracteres).", ctx.user_id, len(texto))
 
     await context.bot.send_chat_action(chat_id=ctx.chat_id, action=ChatAction.TYPING)
 
@@ -538,33 +628,49 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 # Registo
 # ---------------------------------------------------------------------------
 def register_handlers(application: Application) -> None:
-    """Liga todos os handlers à aplicação do Telegram."""
+    """Liga todos os handlers à aplicação do Telegram.
+
+    Tudo aqui é restrito a conversas privadas. Os dados são pessoais e o
+    `chat_id` é guardado com cada lembrete: num grupo, um `/notes` despejava as
+    notas à frente de toda a gente e um lembrete marcado lá era entregue lá,
+    horas depois, quando já ninguém se lembrava disso.
+    """
     # Grupo -1 corre antes de todos os outros: é o porteiro.
     application.add_handler(TypeHandler(Update, guard_access), group=-1)
 
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler(["help", "ajuda"], cmd_help))
-    application.add_handler(CommandHandler(["today", "hoje"], cmd_today))
-    application.add_handler(CommandHandler("agenda", cmd_agenda))
-    application.add_handler(CommandHandler(["notes", "notas"], cmd_notes))
-    application.add_handler(CommandHandler(["reminders", "lembretes"], cmd_reminders))
-    application.add_handler(CommandHandler(["forget", "esquecer"], cmd_forget))
-    application.add_handler(CommandHandler(["who", "whoami", "quem"], cmd_who))
-    application.add_handler(CommandHandler("allow", cmd_allow))
-    application.add_handler(CommandHandler("revoke", cmd_revoke))
+    privado = filters.ChatType.PRIVATE
+
+    for nomes, funcao in [
+        ("start", cmd_start),
+        (["help", "ajuda"], cmd_help),
+        (["today", "hoje"], cmd_today),
+        ("agenda", cmd_agenda),
+        (["notes", "notas"], cmd_notes),
+        (["reminders", "lembretes"], cmd_reminders),
+        (["forget", "esquecer"], cmd_forget),
+        (["who", "whoami", "quem"], cmd_who),
+        ("allow", cmd_allow),
+        ("revoke", cmd_revoke),
+    ]:
+        application.add_handler(CommandHandler(nomes, funcao, filters=privado))
 
     # Os botões têm de ser interceptados ANTES do handler genérico de texto,
     # senão o seu conteúdo seguia para o modelo e custava tokens.
     botoes = "|".join(re.escape(rotulo) for rotulo in _BUTTON_ROUTES)
-    application.add_handler(MessageHandler(filters.Regex(f"^({botoes})$"), handle_button))
+    application.add_handler(
+        MessageHandler(privado & filters.Regex(f"^({botoes})$"), handle_button)
+    )
 
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(
+        MessageHandler(privado & filters.TEXT & ~filters.COMMAND, handle_message)
+    )
     application.add_handler(
         MessageHandler(
-            filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL | filters.VIDEO,
+            privado
+            & (filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL | filters.VIDEO),
             handle_unsupported,
         )
     )
 
     application.add_error_handler(on_error)
-    logger.info("Handlers do Telegram registados.")
+    logger.info("Handlers do Telegram registados (só conversas privadas).")

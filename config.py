@@ -7,14 +7,28 @@ ficheiro `.env` na raiz do projeto (ver `.env.example`).
 from __future__ import annotations
 
 import os
+import pathlib
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
+# Pasta do projeto. Os caminhos por omissão são resolvidos a partir daqui e
+# não da pasta de trabalho: arrancar o bot de outro sítio criava, em silêncio,
+# uma base de dados nova e vazia — ou seja, sem lista de acesso nenhuma.
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parent
+
 # Carrega o .env para o ambiente do processo. `override=False` garante que
 # variáveis já definidas no sistema (ex.: em produção) têm prioridade.
-load_dotenv(override=False)
+load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+
+def _resolve(caminho: str) -> str:
+    """Torna um caminho relativo absoluto, ancorando-o na pasta do projeto."""
+    if not caminho:
+        return caminho
+    p = pathlib.Path(caminho).expanduser()
+    return str(p if p.is_absolute() else PROJECT_ROOT / p)
 
 
 class ConfigError(RuntimeError):
@@ -84,7 +98,10 @@ class Settings:
     read_timeout: float
     log_level: str
     log_file: str
+    log_messages: bool
     allowed_user_ids: frozenset[int]
+    max_preferences: int
+    max_preference_length: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -93,7 +110,7 @@ class Settings:
             deepseek_api_key=_get_str("DEEPSEEK_API_KEY"),
             deepseek_base_url=_get_str("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             deepseek_model=_get_str("DEEPSEEK_MODEL", "deepseek-chat"),
-            database_path=_get_str("DATABASE_PATH", "assistente.db"),
+            database_path=_resolve(_get_str("DATABASE_PATH", "assistente.db")),
             timezone=_get_str("TIMEZONE", "Europe/Lisbon"),
             # Nº máximo de mensagens mantidas em memória antes de resumir.
             # Cada mensagem é reenviada em todas as chamadas à API, por isso
@@ -118,9 +135,19 @@ class Settings:
             log_level=_get_str("LOG_LEVEL", "INFO").upper(),
             # Ficheiro de registo. Indispensável quando o bot corre sem janela:
             # é a única forma de ver o que se passou.
-            log_file=_get_str("LOG_FILE", ""),
-            # Quem pode falar com o bot. Vazio = qualquer pessoa (ver validate).
+            log_file=_resolve(_get_str("LOG_FILE", "")),
+            # Escrever no registo o texto das mensagens e das notas. Desligado
+            # por omissão: o registo é um ficheiro em claro e as notas servem
+            # justamente para guardar coisas como códigos e palavras-passe.
+            log_messages=_get_str("LOG_MESSAGES", "").lower() in {"1", "true", "sim", "yes"},
+            # Quem pode falar com o bot. Ver `validate` e o porteiro em bot.py:
+            # se isto estiver vazio, manda a tabela `access` da base de dados.
             allowed_user_ids=_get_user_ids("ALLOWED_USER_IDS"),
+            # Tectos das preferências: elas são reenviadas em todas as chamadas
+            # à API, por isso sem limite uma conversa podia inchar o prompt
+            # (e a factura) para sempre.
+            max_preferences=_get_int("MAX_PREFERENCES", 32),
+            max_preference_length=_get_int("MAX_PREFERENCE_LENGTH", 200),
         )
 
     @property
@@ -181,6 +208,10 @@ class Settings:
             )
         if self.max_tool_iterations < 1:
             raise ConfigError("MAX_TOOL_ITERATIONS tem de ser pelo menos 1.")
+        if self.max_preferences < 1:
+            raise ConfigError("MAX_PREFERENCES tem de ser pelo menos 1.")
+        if self.max_preference_length < 1:
+            raise ConfigError("MAX_PREFERENCE_LENGTH tem de ser pelo menos 1.")
 
 
 # Instância única partilhada por toda a aplicação.

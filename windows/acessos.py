@@ -17,7 +17,6 @@ segundos — ver `watch_access_list` no `main.py`.
 from __future__ import annotations
 
 import os
-import shutil
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -143,8 +142,18 @@ def esvaziar_lista_fixa(caminho: Path | str = ENV_FILE) -> list[int]:
     if not encontrada:
         return []
 
+    # A cópia é o ficheiro .env inteiro — token do Telegram e chave da API
+    # incluídos. Criada de raiz a 0600, e não copiada e apertada a seguir: no
+    # meio das duas coisas havia uma janela em que ficava legível por todos.
+    backup = caminho.with_name(caminho.name + ".bak")
     try:
-        shutil.copy2(caminho, caminho.with_name(caminho.name + ".bak"))
+        original = caminho.read_bytes()
+        with open(os.open(backup, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600), "wb") as copia:
+            copia.write(original)
+        try:
+            os.chmod(backup, 0o600)  # se já existia, o modo antigo mantinha-se
+        except OSError:
+            pass
         with open(caminho, "w", encoding="utf-8", newline="") as ficheiro:
             ficheiro.writelines(novas)
     except OSError as exc:
@@ -163,6 +172,11 @@ def ligar(caminho: Path | str | None = None) -> sqlite3.Connection:
     """
     caminho = caminho_base_dados() if caminho is None else Path(caminho)
     try:
+        # Mesma protecção que o bot aplica: se for o painel a criar o ficheiro
+        # primeiro, ele não pode nascer legível por toda a máquina.
+        if not caminho.exists():
+            caminho.parent.mkdir(parents=True, exist_ok=True)
+            os.close(os.open(caminho, os.O_CREAT | os.O_WRONLY, 0o600))
         conexao = sqlite3.connect(str(caminho), timeout=10.0)
         conexao.row_factory = sqlite3.Row
         conexao.execute("PRAGMA journal_mode=WAL")

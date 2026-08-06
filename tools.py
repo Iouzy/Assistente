@@ -124,8 +124,18 @@ _RELATIVE_RE = re.compile(
 )
 
 
+# Um lembrete não faz sentido a mais de um século de distância, e acima disto
+# o `timedelta` rebenta com OverflowError em vez de devolver uma data.
+_MAX_SEGUNDOS_FUTURO = 100 * 366 * 86400
+
+
 def _parse_relative(text: str, now: datetime) -> Optional[datetime]:
-    """Interpreta «in 20 minutes» / «daqui a 2 horas» / «dentro de 3 dias»."""
+    """Interpreta «in 20 minutes» / «daqui a 2 horas» / «dentro de 3 dias».
+
+    Devolve None — nunca levanta — para expressões absurdas («in 1e20 years»):
+    quem chama espera um `Optional`, e um OverflowError a subir daqui aparecia
+    ao utilizador como uma mensagem de erro interna do Python.
+    """
     match = _RELATIVE_RE.search(text.lower())
     if not match:
         return None
@@ -133,12 +143,19 @@ def _parse_relative(text: str, now: datetime) -> Optional[datetime]:
     quantia_raw = match.group("quantia")
     try:
         quantia = float(quantia_raw.replace(",", "."))
-    except ValueError:
+    except (ValueError, OverflowError):
         quantia = _NUMBER_WORDS.get(quantia_raw, 0)
     if quantia <= 0:
         return None
 
-    return now + timedelta(seconds=quantia * _UNIT_SECONDS[match.group("unidade")])
+    segundos = quantia * _UNIT_SECONDS[match.group("unidade")]
+    if segundos > _MAX_SEGUNDOS_FUTURO:
+        return None
+
+    try:
+        return now + timedelta(seconds=segundos)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _normalise_date_text(text: str) -> str:
@@ -485,35 +502,47 @@ def list_reminders(ctx: ToolContext) -> dict[str, Any]:
 # separadas: poupa cerca de 120 tokens em cada chamada à API e ao modelo é
 # indiferente.
 # ---------------------------------------------------------------------------
-def _cancel_event_reminders(event_id: int) -> None:
+def _cancel_event_reminders(user_id: int, event_id: int) -> None:
     """Cancela os jobs dos lembretes de um evento antes de este desaparecer."""
-    for reminder in db.get_reminders_for_event(event_id):
+    for reminder in db.get_reminders_for_event(user_id, event_id):
         scheduler.cancel_reminder(reminder["id"])
 
 
 def delete_item(ctx: ToolContext, kind: str, id: int) -> dict[str, Any]:  # noqa: A002
-    """Apaga um evento, uma nota ou um lembrete pelo respectivo id."""
+    """Apaga um evento, uma nota ou um lembrete pelo respectivo id.
+
+    A posse é confirmada **antes** de se tocar no scheduler. Pela ordem
+    contrária, adivinhar um número inteiro bastava para calar os lembretes de
+    outra pessoa: o apagar era recusado pela base de dados, mas o job já tinha
+    sido cancelado — e o registo continuava a dizer «por disparar».
+    """
     kind = (kind or "").strip().lower()
     try:
         item_id = int(id)
     except (TypeError, ValueError):
         return {"status": "error", "error": f"Invalid id {id!r}."}
 
+    nao_existe = {"status": "error", "error": f"No {kind} with id {item_id}. Search for it first."}
+
     if kind == "event":
+        if not db.event_belongs_to(ctx.user_id, item_id):
+            return nao_existe
         # A base de dados apaga os lembretes em cascata, mas os jobs já
         # agendados têm de ser retirados do scheduler à mão.
-        _cancel_event_reminders(item_id)
+        _cancel_event_reminders(ctx.user_id, item_id)
         apagado = db.delete_event(ctx.user_id, item_id)
     elif kind == "note":
         apagado = db.delete_note(ctx.user_id, item_id)
     elif kind == "reminder":
+        if not db.reminder_belongs_to(ctx.user_id, item_id):
+            return nao_existe
         scheduler.cancel_reminder(item_id)
         apagado = db.delete_reminder(ctx.user_id, item_id)
     else:
         return {"status": "error", "error": "kind must be event, note or reminder."}
 
     if not apagado:
-        return {"status": "error", "error": f"No {kind} with id {item_id}. Search for it first."}
+        return nao_existe
 
     logger.info("%s #%s apagado pelo utilizador %s.", kind, item_id, ctx.user_id)
     return {"status": "ok", "deleted": {"kind": kind, "id": item_id}}
@@ -551,7 +580,7 @@ def update_event(
     descricao_final = nova_descricao or evento["description"]
 
     # O aviso antigo deixou de fazer sentido: cancelamos e criamos outro.
-    for reminder in db.get_reminders_for_event(event_id):
+    for reminder in db.get_reminders_for_event(ctx.user_id, event_id):
         scheduler.cancel_reminder(reminder["id"])
         db.delete_reminder(ctx.user_id, reminder["id"])
 
@@ -599,7 +628,16 @@ def set_preference(ctx: ToolContext, key: str, value: str = "") -> dict[str, Any
         db.delete_preference(ctx.user_id, key)
         return {"status": "ok", "removed": key}
 
-    db.set_preference(ctx.user_id, key, value)
+    try:
+        db.set_preference(ctx.user_id, key, value)
+    except db.TooManyPreferences:
+        return {
+            "status": "error",
+            "error": (
+                f"Preference limit reached ({settings.max_preferences}). "
+                "Ask the user which existing one to drop, then remove it with an empty value."
+            ),
+        }
     logger.info("Preferência %r guardada para o utilizador %s.", key, ctx.user_id)
     return {"status": "ok", "preference": {key: value}}
 

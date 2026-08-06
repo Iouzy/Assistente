@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import pathlib
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 
@@ -27,14 +27,17 @@ import bot as bot_module
 import database as db
 import llm
 import scheduler
-from config import ConfigError, settings
+from config import PROJECT_ROOT, ConfigError, settings
 
 logger = logging.getLogger(__name__)
 
 # Ficheiro-sentinela: criá-lo pede ao bot que encerre ordenadamente. É como o
 # painel de controlo o desliga — matar o processo à força saltaria o
 # encerramento e perderia a memória de curto prazo por gravar.
-STOP_FILE = pathlib.Path(".stop-assistente")
+#
+# Ancorado na pasta do projeto, e não na de trabalho: o painel escreve-o lá, e
+# se o bot fosse arrancado de outro sítio ficavam à espera um do outro.
+STOP_FILE = PROJECT_ROOT / ".stop-assistente"
 
 # De quantos em quantos segundos se relê a lista de acesso da base de dados,
 # para apanhar as permissões dadas no painel de controlo (outro processo).
@@ -62,14 +65,19 @@ def setup_logging() -> None:
         handlers.append(logging.StreamHandler(sys.stdout))
 
     if settings.log_file:
-        handlers.append(
-            RotatingFileHandler(
-                settings.log_file,
-                maxBytes=5_000_000,  # 5 MB por ficheiro
-                backupCount=3,       # mantém 3 ficheiros antigos
-                encoding="utf-8",
-            )
+        ficheiro = RotatingFileHandler(
+            settings.log_file,
+            maxBytes=5_000_000,  # 5 MB por ficheiro
+            backupCount=3,       # mantém 3 ficheiros antigos
+            encoding="utf-8",
         )
+        # O registo tem nomes, ids e (se LOG_MESSAGES estiver ligado) o texto
+        # das conversas: legível só pelo dono, como a base de dados.
+        try:
+            os.chmod(settings.log_file, 0o600)
+        except OSError:
+            pass  # Windows: a protecção é a ACL da pasta do utilizador
+        handlers.append(ficheiro)
 
     logging.basicConfig(
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -159,6 +167,12 @@ async def watch_access_list() -> None:
 async def on_startup(application: Application) -> None:
     """Executado depois de o event loop arrancar, antes do polling."""
     loop = asyncio.get_running_loop()
+
+    # O scheduler tem de saber quem continua autorizado: um lembrete é
+    # agendado com antecedência e o acesso pode ter sido retirado entretanto.
+    # Definido antes do `start()`, que já reagenda os lembretes pendentes.
+    bot_module.refresh_access_cache()
+    scheduler.set_access_check(bot_module.autorizados)
     scheduler.start(build_notifier(application, loop))
 
     # Um ficheiro deixado de uma execução anterior desligaria o bot logo a
@@ -193,18 +207,31 @@ async def on_startup(application: Application) -> None:
 
     if permitidos:
         logger.info("Acesso restrito a %d utilizador(es), pela base de dados.", len(permitidos))
+        if not await asyncio.to_thread(db.has_owner):
+            logger.warning(
+                "Há utilizadores autorizados mas nenhum está marcado como dono: "
+                "os comandos /allow e /revoke ficam indisponíveis. Marque um dono "
+                "no painel de controlo («Utilizadores» → «Tornar dono»)."
+            )
     else:
+        # Sem lista, o bot fica mudo para toda a gente — é o comportamento
+        # correcto. Ninguém é promovido a dono por escrever primeiro.
         logger.warning(
-            "O bot ainda não tem dono. A PRIMEIRA pessoa que lhe escrever fica "
-            "registada como dono e o bot passa a privado — escreva-lhe já, antes "
-            "que outra pessoa descubra o @%s.",
-            me.username,
+            "Ninguém está autorizado: o assistente vai ignorar todas as mensagens, "
+            "sem responder. Autorize o seu id no painel de controlo "
+            "(«Utilizadores») ou preencha ALLOWED_USER_IDS no .env."
         )
 
 
 async def on_shutdown(application: Application) -> None:
-    """Encerramento ordenado: guarda a memória, pára o scheduler, fecha a BD."""
-    scheduler.shutdown(wait=False)
+    """Encerramento ordenado: guarda a memória, pára o scheduler, fecha a BD.
+
+    A espera pelas tarefas do scheduler é intencional: com `wait=False` uma
+    arrumação a meio continuava a correr enquanto a base de dados era fechada
+    debaixo dela.
+    """
+    scheduler.shutdown(wait=True)
+    scheduler.set_access_check(None)
 
     # Conversas que nunca atingiram o limite de resumo só existem em RAM.
     # Sem isto, desligar o bot apagava-as sem deixar rasto. O limite de tempo
