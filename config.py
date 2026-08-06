@@ -35,6 +35,28 @@ def _get_int(name: str, default: int) -> int:
         raise ConfigError(f"A variável {name} tem de ser um número inteiro (valor: {raw!r}).") from exc
 
 
+def _get_user_ids(name: str) -> frozenset[int]:
+    """Lê uma lista de ids numéricos do Telegram separados por vírgulas."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return frozenset()
+
+    ids: set[int] = set()
+    for pedaco in raw.replace(";", ",").split(","):
+        pedaco = pedaco.strip()
+        if not pedaco:
+            continue
+        try:
+            ids.add(int(pedaco))
+        except ValueError as exc:
+            raise ConfigError(
+                f"{name} tem de ser uma lista de números separados por vírgulas "
+                f"(valor inválido: {pedaco!r}). O id aparece nos registos quando "
+                "alguém fala com o bot."
+            ) from exc
+    return frozenset(ids)
+
+
 @dataclass(frozen=True)
 class Settings:
     """Configuração imutável da aplicação."""
@@ -62,6 +84,7 @@ class Settings:
     read_timeout: float
     log_level: str
     log_file: str
+    allowed_user_ids: frozenset[int]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -96,6 +119,8 @@ class Settings:
             # Ficheiro de registo. Indispensável quando o bot corre sem janela:
             # é a única forma de ver o que se passou.
             log_file=_get_str("LOG_FILE", ""),
+            # Quem pode falar com o bot. Vazio = qualquer pessoa (ver validate).
+            allowed_user_ids=_get_user_ids("ALLOWED_USER_IDS"),
         )
 
     @property

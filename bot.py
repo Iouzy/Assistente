@@ -21,9 +21,11 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -86,6 +88,43 @@ HELP = (
     "❓ /help — this message\n\n"
     "_The buttons answer straight from the database, so they're free._"
 )
+
+
+# ---------------------------------------------------------------------------
+# Controlo de acesso
+#
+# Um bot de Telegram é público: qualquer pessoa que descubra o seu username
+# pode escrever-lhe. Os dados estão isolados por `user_id` — um estranho nunca
+# veria a agenda de outra pessoa — mas cada mensagem dele gastaria saldo da
+# API. `ALLOWED_USER_IDS` fecha a porta.
+# ---------------------------------------------------------------------------
+async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Corre antes de tudo o resto; interrompe o processamento a estranhos."""
+    if not settings.allowed_user_ids:
+        return  # sem lista definida, o bot está aberto (avisado no arranque)
+
+    user = update.effective_user
+    if user is None or user.id in settings.allowed_user_ids:
+        return
+
+    logger.warning(
+        "Acesso recusado a %s (id %s, @%s).",
+        user.first_name or "?",
+        user.id,
+        user.username or "sem username",
+    )
+    chat = update.effective_chat
+    if chat is not None:
+        try:
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text="This is a private assistant and you're not on its list. 🔒",
+            )
+        except Exception:  # noqa: BLE001 — o aviso é best-effort
+            logger.debug("Não foi possível avisar o utilizador não autorizado.")
+
+    # Impede que qualquer outro handler veja esta actualização.
+    raise ApplicationHandlerStop
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +367,9 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 def register_handlers(application: Application) -> None:
     """Liga todos os handlers à aplicação do Telegram."""
+    # Grupo -1 corre antes de todos os outros: é o porteiro.
+    application.add_handler(TypeHandler(Update, guard_access), group=-1)
+
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler(["help", "ajuda"], cmd_help))
     application.add_handler(CommandHandler(["today", "hoje"], cmd_today))

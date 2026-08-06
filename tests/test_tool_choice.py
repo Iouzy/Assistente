@@ -4,10 +4,15 @@ Ao contrário dos outros testes, este **fala com a API DeepSeek a sério** — �
 única forma de saber se as descrições das ferramentas são claras o suficiente.
 Custa poucos cêntimos (cerca de 30 chamadas curtas).
 
-É um ensaio a seco: as ferramentas nunca chegam a ser executadas. Quando o
-modelo pede uma consulta (ver as horas, procurar na agenda), devolvemos um
-resultado inventado e deixamo-lo continuar; a ferramenta que ele escolher a
-seguir é a que fica registada. Nada é escrito na base de dados real.
+É um ensaio a seco: nenhuma ferramenta que altere dados chega a ser executada.
+Corre contra uma base de dados temporária, semeada com uma agenda e umas notas
+plausíveis — sem isso o modelo veria tudo vazio e não teria motivo para
+consultar nada, e o ensaio media o vazio em vez da escolha de ferramentas.
+
+Quando o modelo pede uma consulta (ver as horas, procurar na agenda), corremos
+a ferramenta verdadeira — são todas de leitura — e deixamo-lo continuar. A
+acção que ele escolher a seguir é a que fica registada. A base de dados real
+nunca é tocada.
 
 Uso:
     python tests/test_tool_choice.py
@@ -18,11 +23,14 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import sys
 import tempfile
+from datetime import datetime, timedelta
 
-# Base de dados temporária: os dados reais não são tocados.
-os.environ["DATABASE_PATH"] = os.path.join(tempfile.mkdtemp(), "ensaio.db")
+# Base de dados temporária, apagada no fim: os dados reais não são tocados.
+_PASTA_TEMPORARIA = tempfile.mkdtemp(prefix="assistente-ensaio-")
+os.environ["DATABASE_PATH"] = os.path.join(_PASTA_TEMPORARIA, "ensaio.db")
 os.environ.setdefault("TELEGRAM_TOKEN", "123:FAKE")
 os.environ["LOG_LEVEL"] = "ERROR"
 
@@ -93,29 +101,32 @@ CASOS: list[tuple[str, object]] = [
     ("thanks, that's great", None),
 ]
 
-# Ferramentas de consulta: quando o modelo as pede, respondemos e deixamo-lo
-# continuar, porque o que interessa é a acção que ele toma a seguir.
+# Ferramentas de consulta: são só de leitura, por isso corremos as verdadeiras
+# contra a base de dados semeada e deixamos o modelo continuar. O que interessa
+# avaliar é a acção que ele toma **a seguir**.
 CONSULTAS = {"get_current_datetime", "search_events", "search_notes", "list_reminders"}
 
-RESPOSTAS_INVENTADAS = {
-    "get_current_datetime": lambda ctx: tools.get_current_datetime(ctx),
-    "search_events": lambda ctx: {
-        "status": "ok",
-        "matched_by": "text",
-        "count": 1,
-        "events": [{"id": 42, "description": "Dentist", "when": "Friday, 7 August 2026 at 15:00"}],
-    },
-    "search_notes": lambda ctx: {
-        "status": "ok",
-        "count": 1,
-        "notes": [{"id": 7, "content": "office wifi is Torre2024", "saved": "06/08/2026 11:20"}],
-    },
-    "list_reminders": lambda ctx: {
-        "status": "ok",
-        "count": 1,
-        "reminders": [{"id": 5, "message": "take the pill", "at": "Friday, 7 August 2026 at 09:00"}],
-    },
-}
+
+def semear(ctx: ToolContext) -> None:
+    """Enche a base de dados temporária com dados plausíveis.
+
+    Sem isto, o assistente vê uma agenda vazia e um contexto que diz "nothing
+    scheduled" — e deixa de ter motivo para consultar seja o que for. O ensaio
+    passava a medir o vazio em vez de medir a escolha de ferramentas.
+    """
+    agora = datetime.now(settings.tzinfo)
+    hoje = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Próxima sexta-feira (ou hoje, se hoje for sexta).
+    sexta = hoje + timedelta(days=(4 - hoje.weekday()) % 7)
+
+    db.create_event(ctx.user_id, ctx.chat_id, "Team meeting", hoje + timedelta(hours=10))
+    db.create_event(ctx.user_id, ctx.chat_id, "Dentist", sexta + timedelta(hours=15))
+    db.create_event(ctx.user_id, ctx.chat_id, "Car service", hoje + timedelta(days=9, hours=9))
+    db.create_note(ctx.user_id, "office wifi is Torre2024")
+    db.create_note(ctx.user_id, "the alarm code is 4471")
+    db.create_reminder(
+        ctx.user_id, ctx.chat_id, "take the pill", agora + timedelta(hours=6), kind="simple"
+    )
 
 
 def escolha_do_modelo(ctx: ToolContext, mensagem: str) -> tuple[list[str], dict, dict]:
@@ -175,8 +186,12 @@ def escolha_do_modelo(ctx: ToolContext, mensagem: str) -> tuple[list[str], dict,
             }
         )
         for c in message.tool_calls:
-            inventar = RESPOSTAS_INVENTADAS.get(c.function.name)
-            resultado = inventar(ctx) if inventar else {"status": "ok"}
+            # Só ferramentas de leitura chegam aqui — nada é alterado.
+            try:
+                args_consulta = json.loads(c.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args_consulta = {}
+            resultado = tools.execute_tool(c.function.name, args_consulta, ctx)
             messages.append(
                 {
                     "role": "tool",
@@ -214,6 +229,7 @@ def main() -> int:
 
     db.init_db()
     ctx = ToolContext(user_id=999_001, chat_id=999_001, first_name="Miguel")
+    semear(ctx)
 
     print()
     print("Ensaio a seco da escolha de ferramentas (chamadas REAIS à API).")
@@ -246,8 +262,12 @@ def main() -> int:
             else esperado
         )
         print(f"{simbolo}  {mensagem[:44]:<46} {esperado_txt:<16} {comentario}")
-        if simbolo == "❌" and argumentos:
-            print(f"     argumentos: {argumentos}")
+        if simbolo == "❌":
+            # A cadeia completa é o que permite distinguir "escolheu mal" de
+            # "parou cedo depois de uma consulta legítima".
+            print(f"     cadeia: {' → '.join(pedidas) if pedidas else '(nenhuma)'}")
+            if argumentos:
+                print(f"     argumentos: {argumentos}")
 
     print("=" * 78)
     print(f"{acertos} corretos · {ambiguos} ambíguos (informativo) · {falhas} errados")
@@ -266,5 +286,15 @@ def main() -> int:
     return 1 if falhas else 0
 
 
+def limpar() -> None:
+    """Apaga a base de dados do ensaio — não deixamos lixo na pasta temporária."""
+    db.close_db()
+    shutil.rmtree(_PASTA_TEMPORARIA, ignore_errors=True)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        codigo = main()
+    finally:
+        limpar()
+    raise SystemExit(codigo)

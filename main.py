@@ -113,6 +113,17 @@ async def on_startup(application: Application) -> None:
     me = await application.bot.get_me()
     logger.info("Assistente online como @%s.", me.username)
 
+    if settings.allowed_user_ids:
+        logger.info("Acesso restrito a %d utilizador(es).", len(settings.allowed_user_ids))
+    else:
+        logger.warning(
+            "ATENÇÃO: o bot está ABERTO — qualquer pessoa que descubra @%s pode "
+            "falar com ele e gastar o saldo da API. Para o fechar, envie-lhe uma "
+            "mensagem, procure o seu id nos registos ('Mensagem de ... (ID)') e "
+            "ponha ALLOWED_USER_IDS=<id> no ficheiro .env.",
+            me.username,
+        )
+
 
 async def on_shutdown(application: Application) -> None:
     """Encerramento ordenado: guarda a memória, pára o scheduler, fecha a BD."""
