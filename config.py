@@ -104,6 +104,27 @@ class Settings:
                 + ". Copie o ficheiro .env.example para .env e preencha-o."
             )
 
+        # Erros de cópia no token são muito frequentes e o erro que o Telegram
+        # devolve mais tarde é críptico. Validamos aqui o que é inequívoco.
+        if any(char.isspace() for char in self.telegram_token):
+            raise ConfigError(
+                "O TELEGRAM_TOKEN tem espaços ou quebras de linha. "
+                "Um token do Telegram é uma única palavra, sem espaços. "
+                "Verifique a linha TELEGRAM_TOKEN= no ficheiro .env."
+            )
+        if ":" not in self.telegram_token:
+            raise ConfigError(
+                "O TELEGRAM_TOKEN parece incompleto: falta a parte numérica antes "
+                "dos dois pontos. O formato correcto é "
+                "TELEGRAM_TOKEN=1234567890:AAH... — copie o token inteiro que o "
+                "@BotFather enviou."
+            )
+        if not self.deepseek_api_key.startswith("sk-"):
+            raise ConfigError(
+                "A DEEPSEEK_API_KEY não começa por 'sk-'. Confirme que copiou a "
+                "chave inteira da consola da DeepSeek."
+            )
+
         try:
             _ = self.tzinfo
         except ZoneInfoNotFoundError as exc:
