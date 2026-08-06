@@ -18,7 +18,7 @@ import logging
 import sys
 
 from telegram import BotCommand, Update
-from telegram.error import InvalidToken, NetworkError
+from telegram.error import InvalidToken, NetworkError, TimedOut
 from telegram.ext import Application, ApplicationBuilder
 
 import bot as bot_module
@@ -107,9 +107,20 @@ def main() -> int:
 
     db.init_db()
 
+    # Os tempos-limite por omissão do python-telegram-bot são de 5 segundos, o
+    # que é curto em ligações domésticas lentas ou com o tráfego do Telegram
+    # filtrado: a ligação estabelece-se mas a resposta não chega a tempo.
     application = (
         ApplicationBuilder()
         .token(settings.telegram_token)
+        .connect_timeout(settings.connect_timeout)
+        .read_timeout(settings.read_timeout)
+        .write_timeout(settings.read_timeout)
+        .pool_timeout(settings.connect_timeout)
+        # O long polling mantém o pedido aberto à espera de mensagens novas,
+        # pelo que precisa de uma margem bem maior do que os pedidos normais.
+        .get_updates_connect_timeout(settings.connect_timeout)
+        .get_updates_read_timeout(settings.read_timeout + 30)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
         .build()
@@ -136,6 +147,18 @@ def main() -> int:
             "    * está toda numa única linha, sem espaços nem aspas\n"
             "    * inclui o número antes dos dois pontos\n"
             "  Se precisar de um token novo, envie /token ao @BotFather."
+        )
+        return 1
+    except TimedOut:
+        logger.error(
+            "O Telegram não respondeu a tempo (%.0fs para ligar, %.0fs para ler).\n"
+            "  Possíveis causas:\n"
+            "    * ligação lenta ou instável — suba CONNECT_TIMEOUT e READ_TIMEOUT no .env\n"
+            "    * antivírus ou firewall a bloquear o Python\n"
+            "    * o operador de rede a filtrar o tráfego do Telegram\n"
+            "  Para testar a ligação: curl -m 20 https://api.telegram.org",
+            settings.connect_timeout,
+            settings.read_timeout,
         )
         return 1
     except NetworkError:

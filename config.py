@@ -57,6 +57,8 @@ class Settings:
     event_reminder_lead_minutes: int
     late_reminder_grace_minutes: int
     max_tool_iterations: int
+    connect_timeout: float
+    read_timeout: float
     log_level: str
 
     @classmethod
@@ -79,6 +81,10 @@ class Settings:
             late_reminder_grace_minutes=_get_int("LATE_REMINDER_GRACE_MINUTES", 120),
             # Rondas de tool calling permitidas por mensagem (trava ciclos).
             max_tool_iterations=_get_int("MAX_TOOL_ITERATIONS", 5),
+            # Tempos-limite de rede em segundos. Os 5 segundos por omissão do
+            # python-telegram-bot são curtos para ligações lentas ou filtradas.
+            connect_timeout=float(_get_int("CONNECT_TIMEOUT", 20)),
+            read_timeout=float(_get_int("READ_TIMEOUT", 30)),
             log_level=_get_str("LOG_LEVEL", "INFO").upper(),
         )
 
