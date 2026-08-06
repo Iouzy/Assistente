@@ -1,5 +1,7 @@
-# Integração com o Telegram (v20+ — API assíncrona).
-python-telegram-bot>=20.7,<22.0
+# Integração com o Telegram (API assíncrona).
+# A 22.8 é a primeira versão compatível com o Python 3.14, onde
+# asyncio.get_event_loop() deixou de criar um event loop automaticamente.
+python-telegram-bot>=22.8,<23.0
 
 # Cliente OpenAI, usado para falar com a API DeepSeek (compatível com OpenAI).
 openai>=1.30.0,<2.0.0
