@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 # encerramento e perderia a memória de curto prazo por gravar.
 STOP_FILE = pathlib.Path(".stop-assistente")
 
+# De quantos em quantos segundos se relê a lista de acesso da base de dados,
+# para apanhar as permissões dadas no painel de controlo (outro processo).
+ACCESS_REFRESH_SECONDS = 10
+
 # Comandos apresentados no menu do Telegram.
 BOT_COMMANDS = [
     BotCommand("today", "Today's appointments"),
@@ -122,6 +126,36 @@ async def watch_stop_file(application: Application) -> None:
             logger.debug("Não foi possível verificar o ficheiro de paragem.", exc_info=True)
 
 
+async def watch_access_list() -> None:
+    """Relê periodicamente quem tem acesso, para apanhar alterações de fora.
+
+    O painel de controlo do Windows escreve directamente na tabela `access`
+    (é outro processo, não passa pelo `/allow`), e o porteiro trabalha a partir
+    de uma cópia em memória. Sem isto, dar ou tirar uma permissão pelo painel
+    só valia depois de reiniciar o bot.
+    """
+    anterior = set(bot_module.autorizados())
+    while True:
+        await asyncio.sleep(ACCESS_REFRESH_SECONDS)
+        try:
+            actual = await asyncio.to_thread(bot_module.refresh_access_cache)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — uma leitura falhada não pode parar o bot
+            logger.debug("Não foi possível reler a lista de acesso.", exc_info=True)
+            continue
+
+        if actual != anterior:
+            logger.info(
+                "Lista de acesso alterada fora do Telegram: %d utilizador(es) "
+                "(+%d, -%d).",
+                len(actual),
+                len(actual - anterior),
+                len(anterior - actual),
+            )
+            anterior = actual
+
+
 async def on_startup(application: Application) -> None:
     """Executado depois de o event loop arrancar, antes do polling."""
     loop = asyncio.get_running_loop()
@@ -152,7 +186,12 @@ async def on_startup(application: Application) -> None:
             "Acesso restrito a %d utilizador(es), pela lista do .env.",
             len(settings.allowed_user_ids),
         )
-    elif permitidos:
+        return  # a lista do .env é fixa: não há nada para vigiar
+
+    # Com a lista na base de dados, ela pode mudar por fora (painel de controlo).
+    application.create_task(watch_access_list())
+
+    if permitidos:
         logger.info("Acesso restrito a %d utilizador(es), pela base de dados.", len(permitidos))
     else:
         logger.warning(
