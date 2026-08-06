@@ -177,7 +177,42 @@ python tests/test_llm.py     # ciclo de tool calling, memória, ponte scheduler�
 Ambos usam uma base de dados temporária e imprimem um relatório linha a linha.
 Correm em cerca de 20 segundos (esperam pelo disparo real de lembretes).
 
-### 3.7. Deixar a correr sempre (opcional)
+### 3.7. Correr em segundo plano no Windows
+
+A pasta `windows/` traz três lançadores:
+
+| Ficheiro | Para quê |
+|---|---|
+| `iniciar_bot.bat` | Arranca com janela visível — bom para testar |
+| `iniciar_oculto.vbs` | Arranca **sem janela nenhuma**, via `pythonw.exe` |
+| `parar_bot.bat` | Pára o bot que esteja a correr sem janela |
+
+**Arrancar sozinho ao iniciar sessão:** `Windows`+`R`, escrever `shell:startup`,
+`Enter` — abre a pasta de arranque. Copie para lá um **atalho** para
+`iniciar_oculto.vbs`.
+
+Sem janela não há registos no ecrã, por isso o `.vbs` define automaticamente
+`LOG_FILE` para `assistente.log`, na pasta do projeto. É aí que se vê o que
+aconteceu:
+
+```
+type assistente.log
+```
+
+**Importante — o que mantém e o que mata o bot:**
+
+| Ação | O bot… |
+|---|---|
+| Bloquear o ecrã (`Windows`+`L`) | ✅ continua a funcionar |
+| Fechar a janela do cmd (se arrancou oculto) | ✅ continua a funcionar |
+| **Suspender ou hibernar** | ❌ pára |
+| Terminar sessão / reiniciar / desligar | ❌ pára |
+
+Para o PC não suspender: **Definições → Sistema → Energia → Ecrã e suspensão**,
+pôr *Suspender* em **Nunca**. Desligar o ecrã é indiferente — só a suspensão do
+sistema é que interrompe o bot.
+
+### 3.8. Deixar a correr sempre num servidor Linux (opcional)
 
 Num servidor Linux com systemd, cria `/etc/systemd/system/assistente.service`:
 
