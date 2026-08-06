@@ -18,6 +18,7 @@ import logging
 import sys
 
 from telegram import BotCommand, Update
+from telegram.error import InvalidToken, NetworkError
 from telegram.ext import Application, ApplicationBuilder
 
 import bot as bot_module
@@ -124,8 +125,27 @@ def main() -> int:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
     logger.info("A iniciar o assistente (modelo %s)...", settings.deepseek_model)
-    # run_polling trata do ciclo de vida do event loop e do encerramento gracioso.
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    try:
+        # run_polling trata do ciclo de vida do event loop e do encerramento gracioso.
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    except InvalidToken:
+        logger.error(
+            "O Telegram recusou o TELEGRAM_TOKEN.\n"
+            "  Abra o ficheiro .env e confirme que a linha do token:\n"
+            "    * tem o formato TELEGRAM_TOKEN=1234567890:AAH...\n"
+            "    * está toda numa única linha, sem espaços nem aspas\n"
+            "    * inclui o número antes dos dois pontos\n"
+            "  Se precisar de um token novo, envie /token ao @BotFather."
+        )
+        return 1
+    except NetworkError:
+        logger.error(
+            "Não foi possível contactar o Telegram. Verifique a ligação à "
+            "Internet (ou se uma firewall está a bloquear api.telegram.org)."
+        )
+        return 1
+    except KeyboardInterrupt:
+        logger.info("Interrompido pelo utilizador.")
     return 0
 
 
