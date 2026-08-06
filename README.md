@@ -171,6 +171,18 @@ python tests/test_llm.py     # tool calling, cache, memória, ponte scheduler↔
 São 115 verificações e correm em cerca de 30 segundos (esperam pelo disparo
 real de lembretes).
 
+Há um terceiro, que **fala com a API a sério** — é a única forma de saber se as
+descrições das ferramentas são claras o suficiente para o modelo escolher bem:
+
+```bash
+python tests/test_tool_choice.py
+```
+
+Manda 26 frases-tipo e mostra que ferramenta o modelo atribuiu a cada uma. É um
+ensaio a seco (nada é executado nem gravado na base de dados real) e custa
+poucos cêntimos. Vale a pena correr sempre que se mexer nas descrições em
+`TOOL_SCHEMAS`.
+
 ### 3.7. Correr em segundo plano no Windows
 
 | Ficheiro | Para quê |
