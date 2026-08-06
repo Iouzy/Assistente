@@ -8,6 +8,10 @@ Ao carregar em Parar, o pedido é feito através do ficheiro-sentinela que o
 `main.py` vigia — encerramento ordenado, com a memória gravada. Só se o
 processo não obedecer é que é terminado à força.
 
+O botão «Utilizadores» abre a gestão de permissões: escreve directamente na
+mesma tabela que os comandos `/allow` e `/revoke` do Telegram usam (ver
+`acessos.py`), com o bot ligado ou desligado.
+
 Uso:  duplo clique em windows/painel.vbs
       ou  .venv\\Scripts\\pythonw.exe windows/painel.pyw
 """
@@ -22,6 +26,9 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import acessos  # noqa: E402  (o caminho tem de ser preparado antes)
 
 RAIZ = Path(__file__).resolve().parent.parent
 STOP_FILE = RAIZ / ".stop-assistente"
@@ -50,6 +57,7 @@ class Painel:
         self.processo: subprocess.Popen | None = None
         self.linhas: queue.Queue[str] = queue.Queue()
         self.a_parar = False
+        self.janela_utilizadores: JanelaUtilizadores | None = None
 
         root.title("Assistente — Painel de Controlo")
         root.geometry("860x560")
@@ -93,6 +101,7 @@ class Painel:
         self.btn_parar = botao("■  Parar", self.parar)
         self.btn_parar.config(state="disabled")
         self.btn_actualizar = botao("⟳  Actualizar", self.actualizar)
+        botao("👥  Utilizadores", self.abrir_utilizadores)
         botao("📁  Pasta", lambda: os.startfile(RAIZ))  # noqa: S606
         botao("🧹  Limpar", self.limpar_consola)
 
@@ -131,6 +140,18 @@ class Painel:
         self.consola.config(state="normal")
         self.consola.delete("1.0", "end")
         self.consola.config(state="disabled")
+
+    def abrir_utilizadores(self) -> None:
+        """Abre (ou traz para a frente) a janela de permissões."""
+        if self.janela_utilizadores is not None and self.janela_utilizadores.winfo_exists():
+            self.janela_utilizadores.lift()
+            self.janela_utilizadores.focus_force()
+            return
+        try:
+            self.janela_utilizadores = JanelaUtilizadores(self.root, self._escrever)
+        except acessos.ErroAcesso as exc:
+            messagebox.showerror("Utilizadores", str(exc))
+            self.janela_utilizadores = None
 
     # -- controlo do processo ---------------------------------------------
     def a_correr(self) -> bool:
@@ -233,7 +254,7 @@ class Painel:
 
             # O painel corre a partir do código que carregou no arranque: se ele
             # próprio mudou, é preciso reabri-lo para a alteração valer.
-            if any(f.startswith("windows/painel") for f in alterados):
+            if any(f.startswith(("windows/painel", "windows/acessos")) for f in alterados):
                 self.root.after(0, self._propor_reinicio)
             else:
                 self.linhas.put("Pronto. Ligue o assistente outra vez.\n")
@@ -363,6 +384,298 @@ class Painel:
             self.root.after(500, self._fechar_quando_parar)
         else:
             self.root.destroy()
+
+
+class JanelaUtilizadores(tk.Toplevel):
+    """Gestão de quem pode falar com o assistente.
+
+    Escreve na tabela `access` da base de dados — a mesma que os comandos
+    `/allow` e `/revoke` usam. Pode fazer-se com o bot a correr: ele relê a
+    lista de 10 em 10 segundos, não é preciso reiniciá-lo.
+    """
+
+    def __init__(self, pai: tk.Misc, registar=None) -> None:
+        super().__init__(pai, bg=CORES["fundo"])
+        self.registar = registar or (lambda *_: None)
+        self.registos: list[dict] = []
+
+        self.conexao = acessos.ligar()  # levanta ErroAcesso se a BD não abrir
+        self.fixos, self.origem_fixos = acessos.lista_fixa()
+
+        self.title("Assistente — Utilizadores")
+        self.geometry("620x520")
+        self.transient(pai)
+        self.protocol("WM_DELETE_WINDOW", self.fechar)
+
+        self._construir()
+        self.recarregar()
+
+    # -- interface ---------------------------------------------------------
+    def _etiqueta(self, pai, texto, cor=None, fonte=("Segoe UI", 9), **kw):
+        return tk.Label(
+            pai, text=texto, bg=CORES["fundo"], fg=cor or CORES["texto"],
+            font=fonte, justify="left", **kw,
+        )
+
+    def _botao(self, pai, texto, comando):
+        return tk.Button(
+            pai, text=texto, command=comando, bg=CORES["botao"], fg=CORES["texto"],
+            activebackground="#45475a", activeforeground=CORES["texto"],
+            relief="flat", padx=12, pady=5, font=("Segoe UI", 9), cursor="hand2",
+            borderwidth=0,
+        )
+
+    def _construir(self) -> None:
+        if self.origem_fixos:
+            self._construir_aviso_lista_fixa()
+
+        self._etiqueta(
+            self, "Quem pode falar com o assistente", fonte=("Segoe UI", 11, "bold")
+        ).pack(anchor="w", padx=14, pady=(12, 4))
+
+        moldura = tk.Frame(self, bg=CORES["fundo"])
+        moldura.pack(fill="both", expand=True, padx=14)
+        barra = tk.Scrollbar(moldura, relief="flat", borderwidth=0)
+        barra.pack(side="right", fill="y")
+        self.lista = tk.Listbox(
+            moldura, bg="#11111b", fg=CORES["texto"], font=("Consolas", 10),
+            relief="flat", highlightthickness=0, activestyle="none",
+            selectbackground="#45475a", selectforeground=CORES["texto"],
+            yscrollcommand=barra.set,
+        )
+        self.lista.pack(side="left", fill="both", expand=True)
+        barra.config(command=self.lista.yview)
+
+        accoes = tk.Frame(self, bg=CORES["fundo"])
+        accoes.pack(fill="x", padx=14, pady=8)
+        self._botao(accoes, "🗑  Remover", self.remover).pack(side="left", padx=(0, 6))
+        self._botao(accoes, "👑  Tornar dono", self.tornar_dono).pack(side="left", padx=6)
+        self._botao(accoes, "⟳  Actualizar", self.recarregar).pack(side="left", padx=6)
+
+        # -- adicionar --
+        adicionar = tk.Frame(self, bg=CORES["fundo"])
+        adicionar.pack(fill="x", padx=14, pady=(4, 0))
+        self._etiqueta(adicionar, "Id do Telegram").pack(side="left")
+        self.campo_id = tk.Entry(
+            adicionar, width=14, bg="#11111b", fg=CORES["texto"], relief="flat",
+            insertbackground=CORES["texto"], font=("Consolas", 10),
+        )
+        self.campo_id.pack(side="left", padx=(6, 12), ipady=3)
+        self._etiqueta(adicionar, "Nome").pack(side="left")
+        self.campo_nome = tk.Entry(
+            adicionar, width=18, bg="#11111b", fg=CORES["texto"], relief="flat",
+            insertbackground=CORES["texto"], font=("Segoe UI", 10),
+        )
+        self.campo_nome.pack(side="left", padx=(6, 12), ipady=3)
+        self._botao(adicionar, "➕  Adicionar", self.adicionar).pack(side="left")
+        self.campo_id.bind("<Return>", lambda _: self.adicionar())
+        self.campo_nome.bind("<Return>", lambda _: self.adicionar())
+
+        self.estado = self._etiqueta(self, "", wraplength=580)
+        self.estado.pack(anchor="w", padx=14, pady=(8, 0))
+
+        self._etiqueta(
+            self,
+            "O id de cada pessoa aparece na consola do painel quando ela tenta "
+            "escrever ao bot, ou pode ser obtido enviando /who a este assistente "
+            "(ou uma mensagem ao @userinfobot).\n"
+            "As alterações valem em poucos segundos — não é preciso reiniciar o bot.",
+            cor=CORES["desligado"], wraplength=580,
+        ).pack(anchor="w", padx=14, pady=(4, 12))
+
+    def _construir_aviso_lista_fixa(self) -> None:
+        """Banner para quando o `.env` fixa a lista e manda na base de dados."""
+        caixa = tk.Frame(self, bg="#302d41")
+        caixa.pack(fill="x", padx=14, pady=(14, 0))
+        ids = ", ".join(str(uid) for uid in self.fixos) or "(nenhum)"
+        tk.Label(
+            caixa,
+            text=(
+                f"⚠  A lista está fixada em ALLOWED_USER_IDS ({self.origem_fixos}): {ids}.\n"
+                "Enquanto assim for, o bot ignora as permissões geridas aqui."
+            ),
+            bg="#302d41", fg=CORES["aviso"], font=("Segoe UI", 9), justify="left",
+            wraplength=560,
+        ).pack(anchor="w", padx=10, pady=(8, 4))
+
+        if self.origem_fixos == "sistema":
+            tk.Label(
+                caixa,
+                text="Vem de uma variável de ambiente do sistema — tem de ser lá que a apaga.",
+                bg="#302d41", fg=CORES["texto"], font=("Segoe UI", 9), wraplength=560,
+                justify="left",
+            ).pack(anchor="w", padx=10, pady=(0, 8))
+        else:
+            self._botao(caixa, "Passar a gestão para o painel", self.libertar_lista_fixa).pack(
+                anchor="w", padx=10, pady=(0, 8)
+            )
+
+    # -- dados -------------------------------------------------------------
+    def _dizer(self, texto: str, cor: str | None = None) -> None:
+        self.estado.config(text=texto, fg=cor or CORES["texto"])
+
+    def recarregar(self) -> None:
+        try:
+            self.registos = acessos.listar(self.conexao)
+        except Exception as exc:  # noqa: BLE001 — mostrar é melhor do que rebentar
+            self._dizer(f"Não consegui ler a lista: {exc}", CORES["erro"])
+            return
+
+        self.lista.delete(0, "end")
+        for registo in self.registos:
+            coroa = "👑" if registo["is_owner"] else "  "
+            nome = registo["label"] or "sem nome"
+            desde = str(registo["granted_at"] or "")[:10]
+            self.lista.insert("end", f" {coroa} {registo['user_id']:<12} {nome:<20} desde {desde}")
+
+        if not self.registos:
+            self._dizer(
+                "Ninguém na lista: o bot está aberto e a primeira pessoa que lhe "
+                "escrever fica dona. Adicione-se aqui para o fechar já.",
+                CORES["aviso"],
+            )
+        else:
+            self._dizer(f"{len(self.registos)} utilizador(es) com acesso.", CORES["ligado"])
+
+    def _seleccionado(self) -> dict | None:
+        indices = self.lista.curselection()
+        if not indices:
+            self._dizer("Escolha primeiro alguém da lista.", CORES["aviso"])
+            return None
+        return self.registos[indices[0]]
+
+    # -- acções ------------------------------------------------------------
+    def adicionar(self) -> None:
+        bruto = self.campo_id.get().strip()
+        if not bruto:
+            self._dizer("Escreva o id do Telegram (só números).", CORES["aviso"])
+            return
+        try:
+            user_id = int(bruto)
+        except ValueError:
+            self._dizer(f"«{bruto}» não é um id — o id é um número.", CORES["erro"])
+            return
+
+        nome = self.campo_nome.get().strip()
+        try:
+            dono = acessos.adicionar(self.conexao, user_id, nome)
+        except Exception as exc:  # noqa: BLE001
+            self._dizer(f"Não consegui gravar: {exc}", CORES["erro"])
+            return
+
+        self.campo_id.delete(0, "end")
+        self.campo_nome.delete(0, "end")
+        self.recarregar()
+        extra = " (é o dono, por ser o primeiro da lista)" if dono else ""
+        self._dizer(f"✅ {user_id}{f' — {nome}' if nome else ''} já pode falar com o bot{extra}.",
+                    CORES["ligado"])
+        self.registar(f"👥 Acesso dado a {user_id}{f' ({nome})' if nome else ''}.\n", "ok")
+
+    def remover(self) -> None:
+        registo = self._seleccionado()
+        if registo is None:
+            return
+        if registo["is_owner"]:
+            self._dizer(
+                "O dono não pode ser removido. Passe primeiro a outra pessoa "
+                "com «Tornar dono».",
+                CORES["aviso"],
+            )
+            return
+
+        nome = registo["label"] or str(registo["user_id"])
+        if not messagebox.askyesno(
+            "Utilizadores", f"Retirar o acesso a {nome}?", parent=self
+        ):
+            return
+
+        try:
+            retirado = acessos.remover(self.conexao, registo["user_id"])
+        except Exception as exc:  # noqa: BLE001
+            self._dizer(f"Não consegui remover: {exc}", CORES["erro"])
+            return
+
+        self.recarregar()
+        if retirado:
+            self._dizer(f"✅ {registo['user_id']} já não tem acesso.", CORES["ligado"])
+            self.registar(f"👥 Acesso retirado a {registo['user_id']}.\n", "aviso")
+        else:
+            self._dizer("Não havia nada para remover.", CORES["aviso"])
+
+    def tornar_dono(self) -> None:
+        registo = self._seleccionado()
+        if registo is None:
+            return
+        if registo["is_owner"]:
+            self._dizer("Essa pessoa já é a dona.", CORES["aviso"])
+            return
+
+        nome = registo["label"] or str(registo["user_id"])
+        if not messagebox.askyesno(
+            "Utilizadores",
+            f"Tornar {nome} o dono do assistente?\n\n"
+            "O dono não pode ser removido da lista — quem o era deixa de ter "
+            "essa protecção.",
+            parent=self,
+        ):
+            return
+
+        try:
+            mudou = acessos.definir_dono(self.conexao, registo["user_id"])
+        except Exception as exc:  # noqa: BLE001
+            self._dizer(f"Não consegui mudar o dono: {exc}", CORES["erro"])
+            return
+
+        self.recarregar()
+        if mudou:
+            self._dizer(f"👑 {nome} é agora o dono.", CORES["ligado"])
+            self.registar(f"👥 {registo['user_id']} passou a dono.\n", "ok")
+
+    def libertar_lista_fixa(self) -> None:
+        """Esvazia o `ALLOWED_USER_IDS` do `.env` e traz os ids para a base de dados."""
+        if not messagebox.askyesno(
+            "Utilizadores",
+            "A lista passa a ser gerida aqui (e pelos comandos /allow e /revoke).\n\n"
+            f"Os ids que estão no .env ({len(self.fixos)}) são copiados para a base "
+            "de dados e a linha ALLOWED_USER_IDS fica vazia. É guardada uma cópia "
+            "do ficheiro em .env.bak.\n\n"
+            "O bot tem de ser reiniciado para a mudança valer. Continuar?",
+            parent=self,
+        ):
+            return
+
+        try:
+            ids = acessos.esvaziar_lista_fixa()
+            acessos.importar(self.conexao, ids)
+        except acessos.ErroAcesso as exc:
+            self._dizer(str(exc), CORES["erro"])
+            return
+
+        self.fixos, self.origem_fixos = [], ""
+        self.recarregar()
+        self._dizer(
+            f"✅ {len(ids)} id(s) copiado(s) para a base de dados. "
+            "Pare e volte a ligar o assistente para a mudança valer.",
+            CORES["ligado"],
+        )
+        self.registar(
+            "👥 ALLOWED_USER_IDS esvaziado no .env; o acesso passa a ser gerido no "
+            "painel (reinicie o assistente).\n",
+            "aviso",
+        )
+        messagebox.showinfo(
+            "Utilizadores",
+            "Feito. Reabra esta janela depois de reiniciar o assistente.",
+            parent=self,
+        )
+
+    # -- fecho -------------------------------------------------------------
+    def fechar(self) -> None:
+        try:
+            self.conexao.close()
+        except Exception:  # noqa: BLE001 — fechar nunca pode falhar
+            pass
+        self.destroy()
 
 
 def main() -> int:

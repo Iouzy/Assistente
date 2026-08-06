@@ -80,6 +80,8 @@ Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
   como dona, e mais ninguém consegue falar com ele.
 - **Partilha por comando:** `/allow <id>` e `/revoke <id>`, sem editar ficheiros
   nem reiniciar — dá para modo família.
+- **Ou pelo painel do Windows:** o botão «Utilizadores» dá e retira permissões
+  numa janela, com o bot ligado ou desligado.
 - **Ou lista fixa** em `ALLOWED_USER_IDS`, para quem prefere a configuração no
   ficheiro.
 - Os dados estão sempre isolados por utilizador: cada pessoa vê só a sua agenda.
@@ -195,6 +197,30 @@ Daí em diante geres tudo pelo Telegram:
 mostra-o em bots como o @userinfobot, ou aparece nos teus registos se ela
 tentar escrever ao teu bot) e faz `/allow 987654321 Ana`.
 
+#### Pelo painel do Windows (sem ser pelo Telegram)
+
+O botão **👥 Utilizadores** do painel (secção 3.7) abre a mesma lista numa
+janela: escreve o id, dá-lhe um nome e carrega em **Adicionar**. Também dá para
+**Remover** e para **Tornar dono**.
+
+|  | Telegram (`/allow`) | Painel |
+|---|---|---|
+| Dar e retirar acesso | ✅ | ✅ |
+| Mudar o dono | ❌ | ✅ |
+| Funciona antes de o bot arrancar pela primeira vez | ❌ | ✅ |
+| Funciona sem o computador ao pé | ✅ | ❌ |
+
+É a mesma tabela da base de dados nos dois casos, por isso as duas vias podem
+ser usadas à vontade. **Não é preciso reiniciar o bot:** ele relê a lista de 10
+em 10 segundos e apanha o que o painel gravar.
+
+> 💡 Podes fechar o bot **antes** de ele arrancar pela primeira vez: adiciona-te
+> a ti no painel e já ninguém o pode reclamar escrevendo-lhe primeiro.
+
+O id de quem te quer escrever aparece na consola do painel assim que essa
+pessoa tenta falar com o bot (`Acesso recusado a Ana (id 987654321)`) — é a
+forma mais simples de o obter.
+
 #### Modo fixo (`.env`)
 
 Preencher a variável fixa a lista e desliga o `/allow` e o `/revoke`:
@@ -205,6 +231,12 @@ ALLOWED_USER_IDS=123456789,987654321
 
 Faz mais sentido num servidor, onde se quer a configuração no ficheiro e não
 numa conversa. Para saberes o teu id, envia `/who` ao bot.
+
+Enquanto a variável estiver preenchida, o `/allow`, o `/revoke` e o painel
+ficam sem efeito — a janela **Utilizadores** avisa-te disso e tem um botão
+**«Passar a gestão para o painel»**, que copia os ids do `.env` para a base de
+dados e esvazia a linha (com cópia de segurança em `.env.bak`). Aí sim, é
+preciso reiniciar o bot, porque o `.env` só é lido no arranque.
 
 Em qualquer dos modos, quem não estiver na lista recebe uma recusa educada e
 nada mais acontece — **nem uma chamada à API**.
@@ -232,9 +264,10 @@ DeepSeek é substituído por um duplo de teste:
 ```bash
 python tests/test_tools.py   # datas, as 10 ferramentas, BD, lembretes reais
 python tests/test_llm.py     # tool calling, cache, memória, ponte scheduler↔asyncio
+python tests/test_acessos.py # permissões geridas pelo painel (não abre janelas)
 ```
 
-São 115 verificações e correm em cerca de 30 segundos (esperam pelo disparo
+São 179 verificações e correm em cerca de 30 segundos (esperam pelo disparo
 real de lembretes).
 
 Há um terceiro, que **fala com a API a sério** — é a única forma de saber se as
@@ -253,7 +286,7 @@ poucos cêntimos. Vale a pena correr sempre que se mexer nas descrições em
 
 | Ficheiro | Para quê |
 |---|---|
-| **`windows/painel.vbs`** | **Painel de controlo: ligar, parar, ver a consola, actualizar** |
+| **`windows/painel.vbs`** | **Painel de controlo: ligar, parar, ver a consola, utilizadores, actualizar** |
 | `windows/iniciar_bot.bat` | Arranca com janela visível — bom para testar |
 | `windows/iniciar_oculto.vbs` | Arranca **sem janela**, via `pythonw.exe` |
 | `windows/parar_bot.bat` | Pára o bot que corre sem janela |
@@ -266,6 +299,11 @@ O botão **Parar** não mata o processo: cria o ficheiro `.stop-assistente`, que
 o `main.py` vigia, e o bot encerra ordenadamente — a memória de curto prazo é
 gravada antes de sair. Só ao fim de 30 segundos sem obedecer é que é terminado
 à força.
+
+O botão **Utilizadores** abre a gestão de permissões (secção 3.4.1): dar e
+retirar acesso, e passar a coroa de dono. Escreve na mesma tabela que o
+`/allow` usa e pode ser feito com o assistente a correr — ele relê a lista de
+10 em 10 segundos.
 
 O botão **Actualizar** faz `git pull` e, comparando os ficheiros entre commits,
 reinstala as dependências se o `requirements.txt` mudar e propõe reabrir-se se
@@ -409,6 +447,12 @@ gravado primeiro e só depois agendado; no arranque os jobs são reconstruídos.
 Uma única ligação com `check_same_thread=False`, protegida por um
 `threading.RLock` que serializa todos os acessos, mais o modo `WAL`.
 
+O `WAL` também é o que deixa o painel de controlo — que é outro processo —
+alterar a lista de acesso com o bot a correr. Como o porteiro trabalha a partir
+de uma cópia em memória, o `main.py` relê a tabela de 10 em 10 segundos
+(`watch_access_list`); é assim que uma permissão dada no painel vale sem
+reiniciar nada.
+
 ### 5.5. Memória em duas camadas
 
 | Camada | Onde vive | Conteúdo |
@@ -437,6 +481,8 @@ desaparecia ao desligar o bot.
 | `database.py` | Esquema SQLite e CRUD thread-safe |
 | `scheduler.py` | Agendamento, disparo e restauro de lembretes |
 | `config.py` | Variáveis de ambiente, validadas no arranque |
+| `windows/painel.pyw` | Painel de controlo (tkinter): processo, consola, utilizadores |
+| `windows/acessos.py` | Lista de acesso vista do painel — só biblioteca-padrão |
 
 ### 5.7. Ferramentas expostas ao modelo
 
