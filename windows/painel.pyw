@@ -92,7 +92,7 @@ class Painel:
         self.btn_ligar = botao("▶  Ligar", self.ligar)
         self.btn_parar = botao("■  Parar", self.parar)
         self.btn_parar.config(state="disabled")
-        botao("⟳  Actualizar", self.actualizar)
+        self.btn_actualizar = botao("⟳  Actualizar", self.actualizar)
         botao("📁  Pasta", lambda: os.startfile(RAIZ))  # noqa: S606
         botao("🧹  Limpar", self.limpar_consola)
 
@@ -202,25 +202,101 @@ class Painel:
         self.root.after(1000, lambda: self._verificar_paragem(segundos + 1))
 
     def actualizar(self) -> None:
+        """Traz o código novo, instala dependências e reinicia-se se precisar."""
         if self.a_correr():
             messagebox.showinfo("Assistente", "Pare o assistente antes de actualizar.")
             return
-        self._escrever("\n⟳  git pull...\n", "aviso")
+        self.btn_actualizar.config(state="disabled")
+        threading.Thread(target=self._actualizar_em_fundo, daemon=True).start()
+
+    def _actualizar_em_fundo(self) -> None:
+        try:
+            antes = self._git("rev-parse", "HEAD")
+            self.linhas.put("\n⟳  git pull...\n")
+            if not self._executar(["git", "pull"]):
+                self.linhas.put("O git devolveu erro — veja acima.\n")
+                return
+
+            depois = self._git("rev-parse", "HEAD")
+            if not antes or antes == depois:
+                self.linhas.put("Já estava actualizado.\n")
+                return
+
+            alterados = self._git("diff", "--name-only", antes, depois).splitlines()
+            self.linhas.put(f"{len(alterados)} ficheiro(s) actualizado(s).\n")
+
+            # Uma versão nova pode exigir bibliotecas novas — foi assim que o
+            # python-telegram-bot antigo partiu o arranque no Python 3.14.
+            if "requirements.txt" in alterados:
+                self.linhas.put("\nAs dependências mudaram — a instalar...\n")
+                self._executar([str(PYTHON), "-m", "pip", "install", "-r", "requirements.txt"])
+
+            # O painel corre a partir do código que carregou no arranque: se ele
+            # próprio mudou, é preciso reabri-lo para a alteração valer.
+            if any(f.startswith("windows/painel") for f in alterados):
+                self.root.after(0, self._propor_reinicio)
+            else:
+                self.linhas.put("Pronto. Ligue o assistente outra vez.\n")
+        finally:
+            self.root.after(0, lambda: self.btn_actualizar.config(state="normal"))
+
+    def _git(self, *args: str) -> str:
+        """Corre um comando git e devolve a saída, ou string vazia se falhar."""
         try:
             resultado = subprocess.run(
-                ["git", "pull"], cwd=str(RAIZ), capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=120,
+                ["git", *args], cwd=str(RAIZ), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=30,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            self._escrever((resultado.stdout or "") + (resultado.stderr or ""))
-            if resultado.returncode == 0:
-                self._escrever("Actualizado. Ligue o assistente outra vez.\n", "ok")
-            else:
-                self._escrever("O git devolveu erro — veja acima.\n", "erro")
+            return resultado.stdout.strip() if resultado.returncode == 0 else ""
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+
+    def _executar(self, comando: list[str]) -> bool:
+        """Corre um comando e vai despejando a saída na consola. True se correu bem."""
+        try:
+            processo = subprocess.Popen(
+                comando, cwd=str(RAIZ), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
         except FileNotFoundError:
-            self._escrever("O git não está instalado ou não está no PATH.\n", "erro")
-        except subprocess.TimeoutExpired:
-            self._escrever("O git demorou demasiado.\n", "erro")
+            self.linhas.put(f"Não encontrei o comando: {comando[0]}\n")
+            return False
+        except OSError as exc:
+            self.linhas.put(f"Falha ao executar: {exc}\n")
+            return False
+
+        if processo.stdout is not None:
+            for linha in processo.stdout:
+                self.linhas.put(linha)
+        return processo.wait() == 0
+
+    def _propor_reinicio(self) -> None:
+        """O painel foi actualizado: propõe reabri-lo já com o código novo."""
+        self._escrever(
+            "\nO painel de controlo também foi actualizado.\n", "aviso"
+        )
+        if not messagebox.askyesno(
+            "Assistente",
+            "O painel de controlo foi actualizado.\n\n"
+            "A versão nova só vale depois de o reabrir.\n\n"
+            "Reabrir agora?",
+        ):
+            self._escrever("Feche e volte a abrir o painel quando puder.\n", "aviso")
+            return
+
+        pythonw = RAIZ / ".venv" / "Scripts" / "pythonw.exe"
+        try:
+            subprocess.Popen(
+                [str(pythonw), str(Path(__file__).resolve())],
+                cwd=str(RAIZ),
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+            )
+        except OSError as exc:
+            messagebox.showerror("Assistente", f"Não consegui reabrir o painel:\n{exc}")
+            return
+        self.root.destroy()
 
     # -- leitura da saída --------------------------------------------------
     def _ler_saida(self) -> None:
