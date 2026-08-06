@@ -58,73 +58,73 @@ check("data inválida devolve None", tools.parse_datetime("blá blá blá") is N
 
 # --- ferramenta 1 -----------------------------------------------------------
 agora = tools.execute_tool("get_current_datetime", {}, ctx)
-check("get_current_datetime", agora["estado"] == "ok", agora["data_hora_legivel"])
+check("get_current_datetime", agora["status"] == "ok", agora["now"])
 
 # --- ferramenta 2 -----------------------------------------------------------
 r = tools.execute_tool("add_event", {"date": "amanhã às 15h",
                                      "description": "Consulta no dentista"}, ctx)
-check("add_event", r["estado"] == "ok", r["evento"]["data_legivel"])
-check("add_event agenda lembrete", r["lembrete"]["criado"], r["lembrete"].get("hora_legivel", ""))
+check("add_event", r["status"] == "ok", r["event"]["when"])
+check("add_event agenda lembrete", r["reminder"]["created"], r["reminder"].get("at", ""))
 
 r2 = tools.execute_tool("add_event", {"date": "hoje daqui a 5 minutos",
                                       "description": "Chamada urgente"}, ctx)
-check("add_event evento próximo", r2["estado"] == "ok")
+check("add_event evento próximo", r2["status"] == "ok")
 
 r3 = tools.execute_tool("add_event", {"date": "não sei quando",
                                       "description": "Coisa"}, ctx)
-check("add_event data inválida devolve erro", r3["estado"] == "erro")
+check("add_event data inválida devolve erro", r3["status"] == "error")
 
 r4 = tools.execute_tool("add_event", {"date": "amanhã", "description": ""}, ctx)
-check("add_event sem descrição devolve erro", r4["estado"] == "erro")
+check("add_event sem descrição devolve erro", r4["status"] == "error")
 
 # --- ferramenta 3 -----------------------------------------------------------
 por_data = tools.execute_tool("search_events", {"query": "amanhã"}, ctx)
-check("search_events por data", por_data["total"] >= 1, str(por_data["total"]))
+check("search_events por data", por_data["count"] >= 1, str(por_data["count"]))
 
 por_texto = tools.execute_tool("search_events", {"query": "dentista"}, ctx)
-check("search_events por texto", por_texto["total"] == 1)
+check("search_events por texto", por_texto["count"] == 1)
 
 proximos = tools.execute_tool("search_events", {"query": ""}, ctx)
-check("search_events próximos", proximos["total"] >= 2, str(proximos["total"]))
+check("search_events próximos", proximos["count"] >= 2, str(proximos["count"]))
 
 hoje = tools.execute_tool("search_events", {"query": "hoje"}, ctx)
-check("search_events hoje", hoje["tipo_de_pesquisa"] == "data", str(hoje["total"]))
+check("search_events hoje", hoje["matched_by"] == "date", str(hoje["count"]))
 
 vazio = tools.execute_tool("search_events", {"query": "unicórnios"}, ctx)
-check("search_events sem resultados", vazio["total"] == 0)
+check("search_events sem resultados", vazio["count"] == 0)
 
 # --- ferramentas 4 e 5 ------------------------------------------------------
 n = tools.execute_tool("save_note", {"content": "O código do alarme é 4471"}, ctx)
-check("save_note", n["estado"] == "ok", n["nota"]["criada_em"])
+check("save_note", n["status"] == "ok", n["note"]["saved"])
 
 busca = tools.execute_tool("search_notes", {"query": "alarme"}, ctx)
-check("search_notes", busca["total"] == 1, busca["notas"][0]["conteudo"])
+check("search_notes", busca["count"] == 1, busca["notes"][0]["content"])
 
 recentes = tools.execute_tool("search_notes", {"query": ""}, ctx)
-check("search_notes sem termo", recentes["total"] == 1)
+check("search_notes sem termo", recentes["count"] == 1)
 
 # --- ferramenta 6 -----------------------------------------------------------
 lem = tools.execute_tool("set_reminder", {"message": "Beber água",
                                           "time": "daqui a 2 segundos"}, ctx)
-check("set_reminder", lem["estado"] == "ok", lem["lembrete"]["hora_legivel"])
+check("set_reminder", lem["status"] == "ok", lem["reminder"]["at"])
 
 passado = tools.execute_tool("set_reminder", {"message": "X", "time": "9:00"}, ctx)
 check("set_reminder hora já passada empurra para o futuro",
-      passado["estado"] == "ok", passado["lembrete"]["hora_legivel"])
+      passado["status"] == "ok", passado["reminder"]["at"])
 
 mau = tools.execute_tool("set_reminder", {"message": "X", "time": "xpto"}, ctx)
-check("set_reminder hora inválida devolve erro", mau["estado"] == "erro")
+check("set_reminder hora inválida devolve erro", mau["status"] == "error")
 
 # --- ferramenta 7 -----------------------------------------------------------
 pendentes = tools.execute_tool("list_reminders", {}, ctx)
-check("list_reminders", pendentes["total"] >= 3, str(pendentes["total"]))
+check("list_reminders", pendentes["count"] >= 3, str(pendentes["count"]))
 
 # --- despacho robusto -------------------------------------------------------
-check("ferramenta inexistente", tools.execute_tool("voar", {}, ctx)["estado"] == "erro")
+check("ferramenta inexistente", tools.execute_tool("voar", {}, ctx)["status"] == "error")
 check("argumentos a mais são ignorados",
-      tools.execute_tool("save_note", {"content": "teste", "lixo": 1}, ctx)["estado"] == "ok")
+      tools.execute_tool("save_note", {"content": "teste", "lixo": 1}, ctx)["status"] == "ok")
 check("argumento em falta devolve erro",
-      tools.execute_tool("add_event", {"date": "amanhã"}, ctx)["estado"] == "erro")
+      tools.execute_tool("add_event", {"date": "amanhã"}, ctx)["status"] == "error")
 
 # --- disparo real do lembrete ----------------------------------------------
 print("... a aguardar o disparo do lembrete (4s)")
@@ -161,18 +161,89 @@ check("lembrete muito antigo descartado",
 db.save_summary(42, "O utilizador chama-se Miguel e trabalha em Aveiro.")
 check("resumo guardado e lido", "Aveiro" in (db.get_latest_summary(42) or ""))
 
+# O prompt de sistema tem de ser 100% estável entre turnos, senão a cache de
+# prefixo da DeepSeek nunca acerta. Todo o conteúdo volátil vive no bloco de
+# contexto, que segue colado à última mensagem.
 prompt = llm.build_system_prompt(ctx)
-check("prompt inclui persona", "português europeu" in prompt)
-check("prompt inclui data actual", "Data e hora:" in prompt)
-check("prompt inclui agenda do dia", "Compromissos de hoje" in prompt or
-      "Não há compromissos" in prompt)
-check("prompt inclui memória", "Aveiro" in prompt)
+check("prompt de sistema inclui persona", "personal assistant on Telegram" in prompt)
+check("prompt de sistema NÃO tem data/hora", "at 1" not in prompt and "2026" not in prompt)
+check("prompt de sistema NÃO tem memória", "Aveiro" not in prompt)
+
+import time as _time  # noqa: E402
+primeiro = llm.build_system_prompt(ctx)
+_time.sleep(1.1)
+check("prompt de sistema é idêntico 1s depois", primeiro == llm.build_system_prompt(ctx))
+
+bloco = llm.build_context_block(ctx.user_id)
+check("bloco de contexto tem data actual", "[context: now" in bloco)
+check("bloco de contexto tem agenda do dia",
+      "Today:" in bloco or "Nothing scheduled today" in bloco)
+check("bloco de contexto tem memória", "Aveiro" in bloco)
 
 llm.append_history(42, "user", "olá")
 llm.append_history(42, "assistant", "olá!")
 check("histórico em memória", len(llm.get_history(42)) == 2)
 llm.reset_history(42)
 check("reset do histórico", llm.get_history(42) == [])
+
+# --- apagar (ferramenta delete_item) ---------------------------------------
+nota_id = tools.execute_tool("save_note", {"content": "nota descartável"}, ctx)["note"]["id"]
+r = tools.execute_tool("delete_item", {"kind": "note", "id": nota_id}, ctx)
+check("delete_item apaga nota", r["status"] == "ok")
+check("nota desapareceu mesmo",
+      tools.execute_tool("search_notes", {"query": "descartável"}, ctx)["count"] == 0)
+
+check("delete_item recusa id inexistente",
+      tools.execute_tool("delete_item", {"kind": "note", "id": 99999}, ctx)["status"] == "error")
+check("delete_item recusa tipo inválido",
+      tools.execute_tool("delete_item", {"kind": "planeta", "id": 1}, ctx)["status"] == "error")
+
+# Apagar um evento tem de levar o lembrete e o respectivo job atrás.
+novo = tools.execute_tool("add_event", {"date": "amanhã às 11h",
+                                        "description": "Reunião a cancelar"}, ctx)
+ev_id = novo["event"]["id"]
+check("evento criado com lembrete", len(db.get_reminders_for_event(ev_id)) == 1)
+rem_id = db.get_reminders_for_event(ev_id)[0]["id"]
+tools.execute_tool("delete_item", {"kind": "event", "id": ev_id}, ctx)
+check("evento apagado", db.get_event(ev_id) is None)
+check("lembrete do evento apagado em cascata", db.get_reminder(rem_id) is None)
+check("job do lembrete cancelado", not scheduler.cancel_reminder(rem_id))
+
+# --- remarcar (ferramenta update_event) ------------------------------------
+alvo = tools.execute_tool("add_event", {"date": "amanhã às 9h",
+                                        "description": "Dentista"}, ctx)["event"]["id"]
+antigo_rem = db.get_reminders_for_event(alvo)[0]["id"]
+
+r = tools.execute_tool("update_event", {"id": alvo, "date": "amanhã às 16h"}, ctx)
+check("update_event muda a hora", r["status"] == "ok" and "16:00" in r["event"]["when"],
+      r.get("event", {}).get("when", r.get("error", "")))
+check("update_event mantém a descrição", r["event"]["description"] == "Dentista")
+check("update_event substitui o lembrete antigo", db.get_reminder(antigo_rem) is None)
+check("update_event cria lembrete novo", len(db.get_reminders_for_event(alvo)) == 1)
+check("novo lembrete é 15 min antes", "15:45" in r["reminder"]["at"], r["reminder"]["at"])
+
+r = tools.execute_tool("update_event", {"id": alvo, "description": "Dentista (Dr. Silva)"}, ctx)
+check("update_event muda só a descrição",
+      r["event"]["description"] == "Dentista (Dr. Silva)" and "16:00" in r["event"]["when"])
+
+check("update_event sem alterações devolve erro",
+      tools.execute_tool("update_event", {"id": alvo}, ctx)["status"] == "error")
+check("update_event recusa evento inexistente",
+      tools.execute_tool("update_event", {"id": 99999, "date": "amanhã"}, ctx)["status"] == "error")
+check("update_event recusa data ilegível",
+      tools.execute_tool("update_event", {"id": alvo, "date": "xpto"}, ctx)["status"] == "error")
+
+# --- preferências como ferramenta ------------------------------------------
+r = tools.execute_tool("set_preference", {"key": "call_me", "value": "Mike"}, ctx)
+check("set_preference guarda", r["status"] == "ok" and
+      db.get_preference(ctx.user_id, "call_me") == "Mike")
+check("preferência aparece no bloco de contexto",
+      "call_me=Mike" in llm.build_context_block(ctx.user_id))
+r = tools.execute_tool("set_preference", {"key": "call_me", "value": ""}, ctx)
+check("set_preference com valor vazio remove",
+      r["status"] == "ok" and db.get_preference(ctx.user_id, "call_me") is None)
+check("set_preference sem chave devolve erro",
+      tools.execute_tool("set_preference", {"key": "", "value": "x"}, ctx)["status"] == "error")
 
 # --- preferências -----------------------------------------------------------
 db.set_preference(42, "tratamento", "tu")
@@ -182,7 +253,8 @@ check("preferência actualizada (upsert)", db.get_preference(42, "tratamento") =
 # --- esquemas das ferramentas ----------------------------------------------
 nomes = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
 esperados = {"get_current_datetime", "add_event", "search_events", "save_note",
-             "search_notes", "set_reminder", "list_reminders"}
+             "search_notes", "set_reminder", "list_reminders",
+             "delete_item", "update_event", "set_preference"}
 check("esquemas completos", nomes == esperados, ", ".join(sorted(nomes)))
 check("esquemas registados no dispatcher", nomes == set(tools._REGISTRY))
 

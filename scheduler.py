@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 import database as db
 from config import settings
@@ -97,6 +98,22 @@ def schedule_reminder(reminder_id: int, remind_at: datetime, late: bool = False)
         name=f"Lembrete #{reminder_id}",
     )
     logger.info("Lembrete #%s agendado para %s.", reminder_id, remind_at.isoformat())
+    return True
+
+
+def schedule_recurring(func: Callable[[], Any], minutes: int, job_id: str) -> bool:
+    """Agenda uma tarefa periódica (usada para arrumar conversas paradas)."""
+    if _scheduler is None or minutes <= 0:
+        return False
+
+    _scheduler.add_job(
+        func,
+        trigger=IntervalTrigger(minutes=minutes),
+        id=job_id,
+        replace_existing=True,
+        name=job_id,
+    )
+    logger.info("Tarefa periódica %r agendada (cada %d min).", job_id, minutes)
     return True
 
 

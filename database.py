@@ -223,10 +223,50 @@ def get_upcoming_events(user_id: int, now: datetime, limit: int = 20) -> list[di
 
 
 def delete_event(user_id: int, event_id: int) -> bool:
-    """Apaga um evento do utilizador. Devolve True se algo foi apagado."""
+    """Apaga um evento do utilizador. Devolve True se algo foi apagado.
+
+    Os lembretes associados desaparecem com ele (ON DELETE CASCADE); quem
+    chamar deve cancelar também os jobs do scheduler.
+    """
     with _cursor() as cur:
         cur.execute("DELETE FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
         return cur.rowcount > 0
+
+
+def update_event(
+    user_id: int,
+    event_id: int,
+    description: Optional[str] = None,
+    event_time: Optional[datetime] = None,
+) -> bool:
+    """Altera a descrição e/ou a hora de um evento. True se algo mudou."""
+    campos: list[str] = []
+    valores: list[Any] = []
+    if description is not None:
+        campos.append("description = ?")
+        valores.append(description.strip())
+    if event_time is not None:
+        campos.append("event_time = ?")
+        valores.append(event_time.isoformat())
+    if not campos:
+        return False
+
+    valores.extend([event_id, user_id])
+    with _cursor() as cur:
+        cur.execute(
+            f"UPDATE events SET {', '.join(campos)} WHERE id = ? AND user_id = ?",
+            valores,
+        )
+        return cur.rowcount > 0
+
+
+def get_reminders_for_event(event_id: int) -> list[dict[str, Any]]:
+    """Lembretes por disparar associados a um evento."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT * FROM reminders WHERE event_id = ? AND fired = 0", (event_id,)
+        )
+        return [_row_to_dict(row) for row in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +447,14 @@ def get_preference(user_id: int, key: str, default: Optional[str] = None) -> Opt
         )
         row = cur.fetchone()
         return row["value"] if row else default
+
+
+def delete_preference(user_id: int, key: str) -> bool:
+    with _cursor() as cur:
+        cur.execute(
+            "DELETE FROM preferences WHERE user_id = ? AND key = ?", (user_id, key.strip())
+        )
+        return cur.rowcount > 0
 
 
 def get_preferences(user_id: int) -> dict[str, str]:

@@ -1,91 +1,95 @@
 # 🤖 Assistente Pessoal para Telegram
 
-Um assistente pessoal completo que vive no Telegram, fala português europeu e
-gere a tua agenda, lembretes e notas — com memória de longo prazo.
+Um assistente pessoal completo que vive no Telegram e gere a tua agenda,
+lembretes e notas — com memória de longo prazo.
 
 ---
 
 ## 1. Visão geral
 
-Este projecto é um bot de Telegram que funciona como secretário pessoal. Em vez
+Este projeto é um bot de Telegram que funciona como secretário pessoal. Em vez
 de comandos rígidos, falas com ele em linguagem natural e é o modelo
 **DeepSeek** que decide, através de *function calling*, quais as ferramentas a
 executar.
 
 ```
-Tu: amanhã às 15h tenho consulta no dentista
-Bot: ✅ Ficou marcado!
-     🗓️ Consulta no dentista
-     sexta-feira, 7 de agosto de 2026 às 15:00
-     ⏰ Aviso-te às 14:45.
+Tu:  dentist tomorrow at 3pm
+Bot: ✅ Booked!
+     🗓️ Dentist
+     Friday, 7 August 2026 at 15:00
+     ⏰ I'll nudge you at 14:45.
+
+Tu:  actually push it to 4
+Bot: ✅ Moved to Friday, 7 August 2026 at 16:00 — alert now at 15:45.
 ```
+
+> **Língua:** o bot fala **inglês**. Foi uma escolha de custo — o inglês gasta
+> menos tokens do que o português, e o catálogo de ferramentas é reenviado em
+> todas as chamadas. Para o passar a português basta reescrever `_PERSONA` em
+> `llm.py`; nada mais no código depende da língua.
 
 Ao contrário de um simples *chatbot*, o assistente:
 
 * **guarda** eventos, notas e lembretes numa base de dados SQLite persistente;
 * **avisa-te** a horas, mesmo que o bot tenha sido reiniciado entretanto;
-* **recorda-se** de ti — os factos importantes das conversas antigas são
-  condensados num resumo que acompanha todos os turnos seguintes.
+* **recorda-se** de ti — o que foi dito é condensado num resumo que acompanha
+  todos os turnos seguintes.
 
 ---
 
 ## 2. Funcionalidades
 
 ### Agenda
-- Criação de compromissos a partir de linguagem natural (`«sexta às 9h30»`,
-  `«dia 12 ao almoço»`, `«daqui a duas semanas»`).
-- **Lembrete automático 15 minutos antes** de cada compromisso (configurável).
-- Consulta por dia (`«o que tenho hoje?»`), por palavra-chave (`«quando é o
-  dentista?»`) ou dos próximos eventos.
-- Compromissos demasiado próximos recebem um aviso imediato em vez de nenhum.
+- Compromissos a partir de linguagem natural (`«friday at 9:30»`,
+  `«in two weeks»`, `«sexta às 9h30»` — o português também é entendido).
+- **Alerta automático 15 minutos antes** de cada compromisso (configurável).
+- **Remarcar e renomear**: «push the dentist to 4pm» move o evento *e* o alerta.
+- **Apagar** eventos, notas ou alertas a pedido.
+- Consulta por dia, por palavra-chave ou dos próximos compromissos.
 
 ### Lembretes
-- Lembretes pontuais independentes da agenda (`«lembra-me de ligar à Ana às
-  18:00»`, `«daqui a 20 minutos»`).
-- Entregues em mensagem privada ao utilizador que os criou.
-- **Sobrevivem a reinícios**: no arranque, todos os lembretes pendentes são
-  reagendados a partir da base de dados.
-- Lembretes que expiraram com o bot offline são entregues à mesma (dentro de uma
-  janela de tolerância configurável) com um aviso de atraso.
+- Alertas pontuais independentes da agenda (`«remind me to call Ana at 6pm»`).
+- Entregues em mensagem privada a quem os criou.
+- **Sobrevivem a reinícios**: no arranque são reagendados a partir da base de dados.
+- Os que expiraram com o bot offline são entregues à mesma (dentro de uma janela
+  de tolerância) com aviso de atraso.
 
-### Notas
-- Guarda qualquer informação com data/hora automática.
-- Pesquisa por texto (`«o que sabes sobre o wi-fi?»`).
+### Notas e preferências
+- Guarda qualquer informação com data/hora e procura por texto.
+- **Preferências duradouras**: «call me Mike», «no emoji please» ficam gravadas
+  e entram no contexto de todas as conversas seguintes.
 
 ### Memória
-- **Curto prazo:** as últimas 20 mensagens de cada utilizador, em RAM.
-- **Longo prazo:** quando o histórico cresce, o próprio modelo resume as
-  mensagens antigas e o resumo fica guardado em SQLite, sendo reinjectado no
-  prompt de sistema de cada turno.
-- A agenda do dia é injectada no contexto, pelo que o assistente sabe sempre o
-  que tens marcado sem precisar de perguntar.
-- Preferências por utilizador guardadas em base de dados.
+- **Curto prazo:** as últimas 12 mensagens, em RAM.
+- **Longo prazo:** o modelo resume as mensagens antigas e o resumo fica em SQLite.
+- **Nada se perde:** conversas curtas que nunca atingem o limite de resumo são
+  arrumadas na mesma — ao fim de 30 minutos de silêncio e no encerramento do bot.
+- A agenda do dia entra no contexto automaticamente.
 
-### Conversa
-- Responde exclusivamente em **português europeu (pt-PT)**.
-- Proactivo: sugere criar lembretes ou notas quando faz sentido.
-- Faz perguntas de esclarecimento quando falta informação (hora, dia, assunto).
-- Confirma sempre o que ficou guardado, mostrando os dados registados.
-- Conversa normal sobre qualquer tema — não é apenas um executor de comandos.
+### Botões
+Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
+**Cada toque responde direto da base de dados, sem uma única chamada à API.**
 
 ### Robustez
 - Base de dados protegida por lock, segura entre a thread do bot e a do scheduler.
-- Falhas da API DeepSeek (rede, quota, autenticação) são traduzidas em mensagens
-  compreensíveis — o bot nunca vai abaixo.
-- Respostas longas são partidas automaticamente; Markdown inválido faz *fallback*
-  para texto simples.
+- Falhas da API (rede, quota, autenticação) traduzidas em mensagens compreensíveis.
+- Credenciais mal copiadas detetadas no arranque, com indicação do que corrigir.
+- Respostas longas partidas automaticamente; Markdown inválido cai para texto simples.
 
-### Comandos rápidos (opcionais, respondem sem gastar tokens)
+### Comandos
 
 | Comando | O que faz |
 |---|---|
-| `/start` | Mensagem de boas-vindas |
-| `/hoje` | Compromissos do dia |
+| `/start` | Boas-vindas e menu de botões |
+| `/today` | Compromissos do dia |
 | `/agenda` | Próximos compromissos |
-| `/notas` | Notas mais recentes |
-| `/lembretes` | Lembretes por disparar |
-| `/esquecer` | Limpa a memória de curto prazo |
-| `/ajuda` | Ajuda |
+| `/notes` | Notas mais recentes |
+| `/reminders` | Alertas por disparar |
+| `/forget` | Arruma e limpa a memória de curto prazo |
+| `/help` | Ajuda |
+
+Os nomes portugueses (`/hoje`, `/notas`, `/lembretes`, `/esquecer`, `/ajuda`)
+continuam a funcionar como aliases.
 
 ---
 
@@ -102,50 +106,42 @@ Ao contrário de um simples *chatbot*, o assistente:
 1. No Telegram, abre uma conversa com [**@BotFather**](https://t.me/BotFather).
 2. Envia `/newbot`.
 3. Escolhe um **nome** (ex.: `O Meu Assistente`).
-4. Escolhe um **username** terminado em `bot` (ex.: `meu_assistente_pessoal_bot`).
-5. O BotFather devolve um token com este aspecto:
-   `123456789:AAH8s-EXEMPLO-de-token-do-BotFather`. **Guarda-o** — é o
-   `TELEGRAM_TOKEN`.
-6. (Opcional) `/setdescription` e `/setuserpic` para personalizar o bot.
+4. Escolhe um **username** terminado em `bot`.
+5. O BotFather devolve um token com este aspeto:
+   `8123456789:AAH8s-EXEMPLO-de-token`. **Copia-o inteiro**, incluindo o número
+   antes dos dois pontos — é o `TELEGRAM_TOKEN`.
 
 > ⚠️ O token dá controlo total sobre o bot. Nunca o publiques nem o commites.
+> Se escapar, `/token` no @BotFather gera outro e invalida o antigo.
 
 ### 3.3. Obter a chave da API DeepSeek
 
 1. Cria conta em <https://platform.deepseek.com/>.
 2. Vai a **API Keys → Create new API key**.
-3. Copia a chave (`sk-...`) — só é mostrada uma vez. É o `DEEPSEEK_API_KEY`.
-4. Carrega alguns euros de saldo em **Top up** (ver a secção 7: para uso pessoal,
-   5 € duram muitos meses).
+3. Copia a chave (`sk-...`) — só é mostrada uma vez.
+4. Carrega saldo em **Top up** (ver secção 7: 5 € duram muito tempo).
 
 ### 3.4. Instalar
 
 ```bash
-# 1. Obter o código
 git clone <url-do-repositorio>
 cd Assistente
 
-# 2. Ambiente virtual (recomendado)
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# 3. Dependências
 pip install -r requirements.txt
-
-# 4. Configuração
 cp .env.example .env             # Windows: copy .env.example .env
 ```
 
 Edita o `.env` e preenche as duas variáveis obrigatórias:
 
 ```ini
-TELEGRAM_TOKEN=123456789:AAH8s-o-teu-token-real
+TELEGRAM_TOKEN=8123456789:AAH8s-o-teu-token-real
 DEEPSEEK_API_KEY=sk-a-tua-chave-real
 ```
 
-As restantes variáveis são opcionais e estão documentadas no `.env.example`
-(fuso horário, caminho da base de dados, tamanho da memória, antecedência dos
-lembretes, nível de logging).
+As restantes são opcionais e estão documentadas no `.env.example`.
 
 ### 3.5. Executar
 
@@ -153,68 +149,55 @@ lembretes, nível de logging).
 python main.py
 ```
 
-Devias ver algo como:
-
 ```
-2026-08-06 11:12:03 | INFO | database | Base de dados pronta em assistente.db
-2026-08-06 11:12:03 | INFO | scheduler | Scheduler iniciado (fuso Europe/Lisbon).
-2026-08-06 11:12:03 | INFO | scheduler | 0 lembrete(s) pendente(s) reagendado(s).
-2026-08-06 11:12:04 | INFO | main | Assistente online como @meu_assistente_pessoal_bot.
+INFO | database  | Base de dados pronta em assistente.db
+INFO | scheduler | Scheduler iniciado (fuso Europe/Lisbon).
+INFO | main      | Assistente online como @o_teu_bot.
 ```
 
-Abre a conversa com o teu bot no Telegram e envia `/start`. Para parar, `Ctrl+C`.
+Abre a conversa com o bot e envia `/start`. Para parar, `Ctrl+C` — a memória em
+RAM é resumida e gravada antes de encerrar.
 
 ### 3.6. Testes (opcional)
 
-O repositório inclui dois conjuntos de testes que não gastam um único token da
-API — o cliente DeepSeek é substituído por um duplo de teste:
+Dois conjuntos de testes que **não gastam um único token da API** — o cliente
+DeepSeek é substituído por um duplo de teste:
 
 ```bash
-python tests/test_tools.py   # datas em pt-PT, ferramentas, BD, lembretes reais
-python tests/test_llm.py     # ciclo de tool calling, memória, ponte scheduler↔asyncio
+python tests/test_tools.py   # datas, as 10 ferramentas, BD, lembretes reais
+python tests/test_llm.py     # tool calling, cache, memória, ponte scheduler↔asyncio
 ```
 
-Ambos usam uma base de dados temporária e imprimem um relatório linha a linha.
-Correm em cerca de 20 segundos (esperam pelo disparo real de lembretes).
+São 115 verificações e correm em cerca de 30 segundos (esperam pelo disparo
+real de lembretes).
 
 ### 3.7. Correr em segundo plano no Windows
 
-A pasta `windows/` traz três lançadores:
-
 | Ficheiro | Para quê |
 |---|---|
-| `iniciar_bot.bat` | Arranca com janela visível — bom para testar |
-| `iniciar_oculto.vbs` | Arranca **sem janela nenhuma**, via `pythonw.exe` |
-| `parar_bot.bat` | Pára o bot que esteja a correr sem janela |
+| `windows/iniciar_bot.bat` | Arranca com janela visível — bom para testar |
+| `windows/iniciar_oculto.vbs` | Arranca **sem janela**, via `pythonw.exe` |
+| `windows/parar_bot.bat` | Pára o bot que corre sem janela |
 
-**Arrancar sozinho ao iniciar sessão:** `Windows`+`R`, escrever `shell:startup`,
-`Enter` — abre a pasta de arranque. Copie para lá um **atalho** para
-`iniciar_oculto.vbs`.
+**Arrancar sozinho ao iniciar sessão:** `Windows`+`R` → `shell:startup` →
+copiar para lá um **atalho** para `iniciar_oculto.vbs`.
 
-Sem janela não há registos no ecrã, por isso o `.vbs` define automaticamente
-`LOG_FILE` para `assistente.log`, na pasta do projeto. É aí que se vê o que
-aconteceu:
-
-```
-type assistente.log
-```
-
-**Importante — o que mantém e o que mata o bot:**
+Sem janela não há registos no ecrã, por isso o `.vbs` define `LOG_FILE` para
+`assistente.log`. É aí que se vê o que aconteceu (`type assistente.log`).
 
 | Ação | O bot… |
 |---|---|
-| Bloquear o ecrã (`Windows`+`L`) | ✅ continua a funcionar |
-| Fechar a janela do cmd (se arrancou oculto) | ✅ continua a funcionar |
+| Bloquear o ecrã (`Windows`+`L`) | ✅ continua |
+| Fechar a janela do cmd (se arrancou oculto) | ✅ continua |
 | **Suspender ou hibernar** | ❌ pára |
 | Terminar sessão / reiniciar / desligar | ❌ pára |
 
-Para o PC não suspender: **Definições → Sistema → Energia → Ecrã e suspensão**,
-pôr *Suspender* em **Nunca**. Desligar o ecrã é indiferente — só a suspensão do
-sistema é que interrompe o bot.
+Para não suspender: **Definições → Sistema → Energia → Suspender: Nunca**, e
+**Painel de Controlo → Opções de Energia → ao fechar a tampa: Não fazer nada**.
 
 ### 3.8. Deixar a correr sempre num servidor Linux (opcional)
 
-Num servidor Linux com systemd, cria `/etc/systemd/system/assistente.service`:
+`/etc/systemd/system/assistente.service`:
 
 ```ini
 [Unit]
@@ -238,27 +221,25 @@ sudo systemctl enable --now assistente
 sudo journalctl -u assistente -f
 ```
 
-Como os lembretes são reagendados a partir da base de dados, reiniciar o serviço
-não perde nada.
-
 ---
 
 ## 4. Exemplos de utilização
 
 | # | O que escreves | O que acontece | Resposta típica |
 |---|---|---|---|
-| 1 | «Marca dentista amanhã às 15h» | `add_event` grava o evento e agenda o aviso para as 14:45 | ✅ Marcado! 🗓️ Dentista — sexta-feira, 7 de agosto de 2026 às 15:00. Aviso-te às 14:45. |
-| 2 | «O que tenho hoje?» | `get_current_datetime` + `search_events("hoje")` | 🗓️ Hoje tens 2 compromissos: 10:00 — Reunião de equipa; 15:00 — Dentista. |
-| 3 | «Lembra-me de tomar o comprimido às 9:00» | `set_reminder` agenda para as 09:00 (ou amanhã, se já passou) | ⏰ Combinado! Aviso-te às 09:00 para tomares o comprimido. |
-| 4 | «Guarda que o código do alarme é 4471» | `save_note` grava a nota com data/hora | 📝 Apontado! «O código do alarme é 4471» — 06/08/2026 11:20. |
-| 5 | «Qual era o código do alarme?» | `search_notes("alarme")` | 📝 Tens apontado: «O código do alarme é 4471», guardado a 06/08/2026. |
-| 6 | «Quando é a consulta?» | `search_events("consulta")` | 🗓️ A consulta é na sexta-feira, 7 de agosto, às 15:00. |
-| 7 | «Marca jantar» | Falta a data — o assistente pergunta em vez de adivinhar | Com todo o gosto! Para que dia e a que horas marco o jantar? |
-| 8 | «Amanhã tenho de tratar dos impostos» | Reconhece a intenção e sugere agendar | Queres que marque isso para amanhã? A que horas te dá jeito? 🗓️ |
-| 9 | *(às 14:45, sem escreveres nada)* | O scheduler dispara e envia mensagem privada | ⏰ **Lembrete de compromisso** — Dentista 🗓️ sexta-feira, 7 de agosto às 15:00 (faltam 15 minutos). |
-| 10 | «Estou stressado com o trabalho» | Conversa normal, sem ferramentas | Compreendo... queres desabafar? Se quiseres, posso ajudar-te a organizar a semana. |
-| 11 | «Chamo-me Miguel e trabalho em Aveiro» | Vai para o histórico e, mais tarde, para o resumo de memória | Muito prazer, Miguel! 👋 Fico a saber. |
-| 12 | *(dias depois)* «Lembras-te onde trabalho?» | O resumo guardado é injectado no prompt de sistema | Claro — em Aveiro. 🙂 |
+| 1 | «dentist tomorrow at 3pm» | `add_event` grava e agenda o aviso para as 14:45 | ✅ Booked! 🗓️ Dentist — Friday, 7 August 2026 at 15:00. I'll nudge you at 14:45. |
+| 2 | «what's on today?» | `get_current_datetime` + `search_events` | 🗓️ Two things today: 10:00 team meeting, 15:00 dentist. |
+| 3 | «remind me to take the pill at 9» | `set_reminder` agenda para as 09:00 | ⏰ Done — I'll ping you at 09:00. |
+| 4 | «note: the alarm code is 4471» | `save_note` grava com data/hora | 📝 Noted — “the alarm code is 4471”. |
+| 5 | «what was the alarm code?» | `search_notes` | 📝 You saved: “the alarm code is 4471”, on 06/08/2026. |
+| 6 | **«push the dentist to 4»** | `search_events` + `update_event` | ✅ Moved to Friday at 16:00 — alert now at 15:45. |
+| 7 | **«cancel the dentist»** | `search_events` + `delete_item` | ✅ Deleted. The alert is off too. |
+| 8 | **«call me Mike from now on»** | `set_preference` | ✅ Got it, Mike. |
+| 9 | «book dinner» | Falta a data — pergunta em vez de adivinhar | Happy to — what day and time? |
+| 10 | *(às 14:45, sem escreveres nada)* | O scheduler dispara sozinho | ⏰ **Reminder** — Dentist 🗓️ Friday, 7 August at 15:00 (in 15 minutes). |
+| 11 | «I'm stressed about work» | Conversa normal, sem ferramentas | That sounds heavy… want to talk it through, or shall I help you plan the week? |
+| 12 | *(dias depois)* «where do I work again?» | O resumo de memória entra no contexto | In Aveiro. 🙂 |
+| 13 | *(toque no botão 📅 Today)* | Consulta direta à base de dados | A lista do dia — **sem chamar a API** |
 
 ---
 
@@ -270,194 +251,204 @@ não perde nada.
    Telegram
       │  (mensagem de texto)
       ▼
-  bot.py ─── constrói o ToolContext (user_id, chat_id, nome)
-      │
+  bot.py ─── botão do menu? ──sim──► resposta direta da BD (custo zero)
+      │ não
       ▼
-  llm.py ─── monta as mensagens:
-      │        [sistema: persona + data/hora + agenda de hoje + resumo de memória]
-      │        [histórico das últimas ≤20 mensagens]
-      │        [mensagem actual]
+  llm.py ─── monta o pedido:
+      │        [sistema : persona — SEMPRE igual                    ]
+      │        [histórico: até 12 mensagens — só acrescenta         ]
+      │        [utilizador: [context: hora + agenda + memória] + msg]
       ▼
-  DeepSeek API  (modelo deepseek-chat, formato OpenAI, tools=[...])
+  DeepSeek API  (deepseek-chat, formato OpenAI, tools=[...])
       │
       ├── sem tool_calls ──────────────► resposta em texto ──► Telegram
       │
       └── com tool_calls
              │
              ▼
-        tools.py ─── executa add_event / search_events / save_note / ...
-             │             │
-             │             ├──► database.py  (SQLite: grava/lê)
-             │             └──► scheduler.py (APScheduler: agenda o aviso)
+        tools.py ─── add_event / update_event / delete_item / ...
+             │             ├──► database.py  (SQLite)
+             │             └──► scheduler.py (APScheduler)
              ▼
         resultados JSON devolvidos ao modelo (role="tool")
              │
              ▼
-        2.ª chamada à DeepSeek ──► resposta final em texto ──► Telegram
+        2.ª chamada ──► resposta final ──► Telegram
 ```
 
-O ciclo repete-se até o modelo responder sem pedir ferramentas (máximo de
-`MAX_TOOL_ITERATIONS` rondas, para travar ciclos).
+### 5.2. Porque é que a ordem do prompt importa
 
-### 5.2. Lembretes e threads
+A DeepSeek desconta fortemente os **prefixos repetidos** entre chamadas
+(*context caching*) — mas só enquanto o início do pedido for **exatamente
+igual**. Por isso:
 
-Este é o ponto mais delicado da arquitectura:
+* o **prompt de sistema não contém nada que mude** — nem a hora, nem a agenda,
+  nem o resumo de memória;
+* tudo o que varia vai num bloco `[context: ...]` colado à **última** mensagem;
+* o histórico é **só acrescentado**, nunca reescrito.
 
-* o `python-telegram-bot` v20 é **assíncrono** (um event loop);
-* o `BackgroundScheduler` do APScheduler corre numa **thread separada**;
+Resultado: cerca de **78% de cada pedido é prefixo estável** e elegível para
+cache. Se a hora ficasse dentro do prompt de sistema — como estava — invalidava
+tudo o que vinha a seguir, incluindo o histórico inteiro.
+
+Para veres a taxa real de acerto, põe `LOG_LEVEL=DEBUG` no `.env`:
+
+```
+Tokens: 1766 entrada (1385 em cache, 78%), 143 saída
+```
+
+### 5.3. Lembretes e threads
+
+O ponto mais delicado da arquitetura:
+
+* o `python-telegram-bot` é **assíncrono** (um event loop);
+* o `BackgroundScheduler` corre numa **thread separada**;
 * `bot.send_message` é uma corotina, que uma thread normal não pode aguardar.
 
 A ponte está em `main.py`: quando o scheduler dispara, chama um *notifier* que
-usa `asyncio.run_coroutine_threadsafe(...)` para agendar o envio no event loop
-do bot e aguarda o resultado. Sem isto, os lembretes falhariam em silêncio.
+usa `asyncio.run_coroutine_threadsafe(...)`. Sem isto, os lembretes falhariam em
+silêncio.
 
-A **base de dados é a fonte de verdade**, não o scheduler. Cada lembrete é
-primeiro gravado na tabela `reminders` e só depois agendado; no arranque,
-`scheduler.restore_pending_reminders()` reconstrói todos os jobs.
+A **base de dados é a fonte de verdade**, não o scheduler: cada lembrete é
+gravado primeiro e só depois agendado; no arranque os jobs são reconstruídos.
 
-### 5.3. Concorrência na base de dados
+### 5.4. Concorrência na base de dados
 
-O bot e o scheduler escrevem na mesma base SQLite a partir de threads
-diferentes. Usamos uma única ligação com `check_same_thread=False`, protegida
-por um `threading.RLock` que serializa todos os acessos, mais o modo `WAL` para
-reduzir bloqueios entre leituras e escritas.
+Uma única ligação com `check_same_thread=False`, protegida por um
+`threading.RLock` que serializa todos os acessos, mais o modo `WAL`.
 
-### 5.4. Memória em duas camadas
+### 5.5. Memória em duas camadas
 
-| Camada | Onde vive | Conteúdo | Quando é usada |
-|---|---|---|---|
-| Curto prazo | RAM (`llm._histories`) | últimas ≤20 mensagens | em cada turno |
-| Longo prazo | SQLite (`summaries`) | resumo dos factos importantes | injectado no prompt de sistema |
+| Camada | Onde vive | Conteúdo |
+|---|---|---|
+| Curto prazo | RAM (`llm._histories`) | últimas ≤12 mensagens |
+| Longo prazo | SQLite (`summaries`) | resumo dos factos importantes |
 
-Quando o histórico passa das 20 mensagens, as mais antigas são enviadas ao
-modelo com um pedido de resumo (`summarize_memory`, interno) e substituídas por
-esse resumo — o que mantém o custo por mensagem estável ao longo do tempo.
+Três momentos geram resumo:
 
-### 5.5. Ficheiros
+1. **Ao passar das 12 mensagens** — as antigas são condensadas e removidas.
+2. **Ao fim de 30 minutos de silêncio** (`IDLE_FLUSH_MINUTES`) — a conversa é
+   arrumada mesmo que nunca tenha chegado ao limite.
+3. **No encerramento** — `flush_all()` grava tudo o que resta em RAM.
+
+Os pontos 2 e 3 existem porque, sem eles, uma conversa curta vivia só em RAM e
+desaparecia ao desligar o bot.
+
+### 5.6. Ficheiros
 
 | Ficheiro | Responsabilidade |
 |---|---|
-| `main.py` | Arranque: logging, configuração, BD, aplicação Telegram, scheduler |
-| `bot.py` | Handlers do Telegram, comandos, envio de mensagens |
-| `llm.py` | Cliente DeepSeek, prompt de sistema, ciclo de tool calling, memória |
-| `tools.py` | As 7 ferramentas + esquemas OpenAI + interpretação de datas em pt-PT |
-| `database.py` | Esquema SQLite e operações CRUD thread-safe |
+| `main.py` | Arranque, logging, ponte thread↔event loop, encerramento |
+| `bot.py` | Handlers, comandos, botões, envio de mensagens |
+| `llm.py` | Cliente DeepSeek, prompt, tool calling, memória |
+| `tools.py` | As 10 ferramentas + esquemas OpenAI + datas naturais |
+| `database.py` | Esquema SQLite e CRUD thread-safe |
 | `scheduler.py` | Agendamento, disparo e restauro de lembretes |
-| `config.py` | Leitura e validação das variáveis de ambiente |
+| `config.py` | Variáveis de ambiente, validadas no arranque |
 
-> Nota: `llm.py` não constava da especificação original de ficheiros, mas separar
-> a camada do modelo da camada do Telegram mantém o `bot.py` legível e torna a
-> lógica de conversa testável sem o Telegram à frente.
+### 5.7. Ferramentas expostas ao modelo
 
-### 5.6. Ferramentas expostas ao modelo
-
-| Ferramenta | Parâmetros | Efeito |
-|---|---|---|
-| `get_current_datetime` | — | Data/hora actuais no fuso configurado |
-| `add_event` | `date`, `description` | Grava o evento **e** agenda o aviso prévio |
-| `search_events` | `query` | Procura por data, por palavra-chave ou próximos |
-| `save_note` | `content` | Grava uma nota com data/hora |
-| `search_notes` | `query` | Procura nas notas |
-| `set_reminder` | `message`, `time` | Agenda um aviso pontual |
-| `list_reminders` | — | Lista os lembretes por disparar |
+| Ferramenta | Efeito |
+|---|---|
+| `get_current_datetime` | Data/hora atuais |
+| `add_event` | Grava o evento **e** agenda o aviso prévio |
+| `update_event` | Remarca ou renomeia, **reagendando o aviso** |
+| `delete_item` | Apaga um evento, nota ou alerta |
+| `search_events` | Procura por data, palavra-chave ou próximos |
+| `save_note` / `search_notes` | Notas |
+| `set_reminder` / `list_reminders` | Alertas pontuais |
+| `set_preference` | Preferências duradouras de comportamento |
 
 `summarize_memory` existe em `llm.py` mas **não** é exposta ao modelo: é
-chamada internamente quando o histórico precisa de ser compactado.
+chamada internamente.
+
+> As descrições das ferramentas são deliberadamente curtas e estão em inglês —
+> viajam em todas as chamadas, por isso cada palavra é paga vezes sem conta.
+> A distinção entre `add_event` e `set_reminder` é o único sítio onde vale a
+> pena gastar palavras, porque é aí que o modelo se engana.
 
 ---
 
 ## 6. Melhorias futuras
 
-- [ ] **Google Calendar / Outlook** — sincronização bidireccional dos eventos.
-- [ ] **Multi-utilizador (modo família)** — agendas partilhadas, permissões e
-      eventos visíveis a vários membros.
-- [ ] **Pesquisa na web (DuckDuckGo)** — nova ferramenta para responder a
-      perguntas actuais (meteorologia, notícias, horários).
-- [ ] **Gestão de tarefas (to-do)** — listas com prioridade, prazo e estado.
-- [ ] **Resumos diários/semanais** — mensagem automática às 8:00 com a agenda do
-      dia e, ao domingo, o resumo da semana.
-- [ ] **Integração de email** — ler a caixa de entrada e transformar mensagens em
-      eventos ou tarefas.
+- [ ] **Google Calendar / Outlook** — sincronização bidirecional.
+- [ ] **Multi-utilizador (modo família)** — agendas partilhadas e permissões.
+- [ ] **Pesquisa na web (DuckDuckGo)** — meteorologia, notícias, horários.
+- [ ] **Gestão de tarefas (to-do)** — listas com prioridade e prazo.
+- [ ] **Resumos diários/semanais** — a agenda do dia às 8:00, a semana ao domingo.
+- [ ] **Integração de email** — transformar mensagens em eventos ou tarefas.
 - [ ] **WhatsApp via Twilio** — o mesmo assistente noutro canal.
 - [ ] **Mensagens de voz (Whisper)** — transcrever áudio e responder em voz.
 - [ ] **Lembretes por localização** — «avisa-me quando chegar ao supermercado».
-- [ ] **Registo de despesas** — «gastei 12 € no almoço» com relatórios mensais.
+- [ ] **Registo de despesas** — «gastei 12 € no almoço», com relatórios mensais.
 - [ ] **Perfis de personalidade configuráveis** — formal, informal, motivacional.
-- [ ] **Cifra ponta-a-ponta da base de dados** — SQLCipher ou cifra ao nível do
-      campo para as notas.
-
-Extras que valem a pena considerar: exportação para `.ics`, cópias de segurança
-automáticas, painel web de administração e testes automatizados das ferramentas.
+- [ ] **Cifra ponta-a-ponta da base de dados** — SQLCipher ou cifra por campo.
+- [ ] **Eventos recorrentes** — «todas as terças às 18h».
+- [ ] **Exportação para `.ics`** e cópias de segurança automáticas.
 
 ---
 
 ## 7. Estimativa de custo mensal
 
-### 7.1. Como funciona o preço da DeepSeek
+### 7.1. Como funciona o preço
 
-A DeepSeek cobra **por token** (≈ 4 caracteres), não por mensagem, com preços
-diferentes para *input* e *output*. Há ainda um desconto substancial para
-**cache hits** — partes do prompt repetidas entre chamadas, que é exactamente o
-caso do nosso prompt de sistema e dos esquemas das ferramentas.
-
-Valores de referência para o `deepseek-chat` (em dólares por milhão de tokens):
+A DeepSeek cobra **por token** (≈ 4 caracteres), com preços diferentes para
+entrada e saída — e um desconto grande para **cache hits**, que é exatamente o
+que a estrutura do prompt (secção 5.2) procura maximizar.
 
 | Tipo | Preço aproximado |
 |---|---|
-| Input (cache miss) | ~$0,28 / M tokens |
-| Input (cache hit) | ~$0,03 / M tokens |
-| Output | ~$0,42 / M tokens |
+| Entrada (cache miss) | ~$0,28 / M tokens |
+| Entrada (**cache hit**) | ~$0,03 / M tokens |
+| Saída | ~$0,42 / M tokens |
 
-> ⚠️ Confirma sempre os valores actuais em
+> ⚠️ Confirma os valores atuais em
 > <https://api-docs.deepseek.com/quick_start/pricing> — a DeepSeek já ajustou
-> os preços mais do que uma vez e costuma ter descontos em horário de menor
-> procura.
+> preços mais do que uma vez e costuma ter descontos fora de horas.
 
-### 7.2. Estimativa para uso pessoal
+### 7.2. Composição de um pedido
 
-Premissas de uma utilização pessoal realista:
-
-* **15 mensagens por dia** (≈ 450 por mês);
-* ~1 800 tokens de input por chamada (persona + agenda do dia + resumo de
-  memória + histórico + esquemas das ferramentas);
-* ~1,6 chamadas à API por mensagem (algumas usam ferramentas, logo há uma
-  segunda chamada) → **≈ 2 900 tokens de input** por mensagem;
-* ~150 tokens de output por mensagem;
-* alguns resumos de memória por mês (custo residual).
-
-| Item | Cálculo | Custo/mês |
+| Componente | Tokens | Estável? |
 |---|---|---|
-| Input | 450 × 2 900 = 1,31 M tokens × $0,28 | ~$0,37 |
-| Output | 450 × 150 = 0,07 M tokens × $0,42 | ~$0,03 |
-| Resumos de memória | ~20 chamadas curtas | <$0,01 |
-| **Total** | | **≈ $0,41 ≈ €0,38** |
+| Esquemas das 10 ferramentas | ~995 | ✅ sempre igual |
+| Prompt de sistema | ~390 | ✅ sempre igual |
+| Histórico (12 mensagens) | ~360 | ✅ só acrescenta |
+| Bloco de contexto + mensagem | ~40 | ❌ muda sempre |
+| **Total** | **~1 766** | **~78% em cache** |
 
-**Conclusão: bem abaixo de €0,50/mês** para uso pessoal típico. Com cache hits a
-factura tende a ficar ainda mais baixa. Um carregamento de 5 € dura,
-realisticamente, mais de um ano.
+### 7.3. Estimativa para uso pessoal
 
-### 7.3. E se usar muito mais?
+15 mensagens/dia (≈450/mês), ~1,6 chamadas por mensagem, ~150 tokens de saída:
 
-O custo escala quase linearmente com o número de mensagens:
+| Item | Custo/mês |
+|---|---|
+| Entrada em cache (~1 385 × 720 chamadas) | ~$0,03 |
+| Entrada sem cache | ~$0,08 |
+| Saída | ~$0,03 |
+| Resumos de memória | <$0,01 |
+| **Total** | **≈ $0,15 ≈ €0,14** |
+
+Antes das otimizações eram ~€0,38. **Um carregamento de 5 € dura anos.**
+
+### 7.4. E se usar muito mais?
 
 | Mensagens/dia | Custo estimado/mês |
 |---|---|
-| 5 | ~€0,13 |
-| 15 | ~€0,38 |
-| 30 | ~€0,75 |
-| 60 | ~€1,50 |
-| 150 | ~€3,80 |
+| 5 | ~€0,05 |
+| 15 | ~€0,14 |
+| 30 | ~€0,28 |
+| 150 | ~€1,40 |
 
-Como reduzir, se precisares:
+Como reduzir ainda mais:
 
-* usar os comandos `/hoje`, `/agenda`, `/notas` — respondem directamente da base
-  de dados, **sem qualquer chamada à API**;
+* **usar os botões** — respondem da base de dados, sem qualquer chamada à API;
 * baixar `MAX_HISTORY_MESSAGES` (menos contexto por chamada);
-* reduzir `max_tokens` em `llm.py`;
 * definir um limite de gastos na consola da DeepSeek.
 
-O Telegram é gratuito e a base de dados é um ficheiro local — a API do modelo é
-o único custo do projecto.
+> **Perspetiva:** um portátil ligado 24/7 gasta ~8,6 kWh/mês, à volta de **2 €**
+> de eletricidade. O modelo custa menos de um décimo disso. Se o objetivo é
+> poupar dinheiro a sério, o passo seguinte é um Raspberry Pi (~0,35 €/mês),
+> não otimizar mais o prompt.
 
 ---
 
@@ -465,23 +456,25 @@ o único custo do projecto.
 
 | Sintoma | Causa provável | Solução |
 |---|---|---|
-| `Configuração inválida: Faltam variáveis...` | `.env` em falta ou incompleto | `cp .env.example .env` e preencher |
-| «A minha chave de acesso ao modelo foi recusada» | `DEEPSEEK_API_KEY` errada | Gerar nova chave na consola DeepSeek |
-| «Estou a receber pedidos a mais» | Saldo esgotado ou *rate limit* | Carregar saldo / esperar |
-| Lembretes chegam à hora errada | `TIMEZONE` incorrecto | Definir `TIMEZONE=Europe/Lisbon` no `.env` |
-| `ZoneInfoNotFoundError` | Base de fusos em falta (Windows) | `pip install tzdata` |
-| Bot não responde | Processo parado ou token errado | Ver logs; confirmar o `TELEGRAM_TOKEN` |
-| «Só consigo ler mensagens de texto» | Enviaste áudio/imagem | Ainda não suportado (ver secção 6) |
+| `Configuração inválida: Faltam variáveis...` | `.env` em falta | `cp .env.example .env` e preencher |
+| `O TELEGRAM_TOKEN tem espaços` | Token mal copiado | Copiar a linha inteira, sem espaços |
+| `O TELEGRAM_TOKEN parece incompleto` | Falta o número antes de `:` | Copiar o token todo do @BotFather |
+| `O Telegram não respondeu a tempo` | Rede lenta, firewall, antivírus | Subir `CONNECT_TIMEOUT`/`READ_TIMEOUT`; testar `curl -m 20 https://api.telegram.org` |
+| «My model credentials were rejected» | `DEEPSEEK_API_KEY` errada | Gerar nova chave |
+| «I am getting rate limited» | Saldo esgotado | Carregar saldo |
+| `RuntimeError: no current event loop` | `python-telegram-bot` antigo no Python 3.14 | `pip install -r requirements.txt` (exige ≥22.8) |
+| Lembretes à hora errada | `TIMEZONE` incorreto | `TIMEZONE=Europe/Lisbon` |
+| `ZoneInfoNotFoundError` | Base de fusos em falta | `pip install tzdata` |
+| Bot não responde | Processo parado ou token errado | Ver `assistente.log` |
 
 ---
 
 ## 9. Privacidade
 
-Tudo é local, excepto o texto das conversas, que é enviado à API DeepSeek para
+Tudo é local, exceto o texto das conversas, que é enviado à API DeepSeek para
 gerar as respostas. A base de dados (`assistente.db`) fica na tua máquina e o
 `.gitignore` já a exclui, tal como o `.env`. Se guardares dados sensíveis,
-considera cifrar o disco — e vê a cifra da base de dados na lista de melhorias
-futuras.
+considera cifrar o disco — e vê a cifra da base de dados na secção 6.
 
 ---
 

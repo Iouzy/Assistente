@@ -54,6 +54,7 @@ class Settings:
     timezone: str
     max_history_messages: int
     history_keep_messages: int
+    idle_flush_minutes: int
     event_reminder_lead_minutes: int
     late_reminder_grace_minutes: int
     max_tool_iterations: int
@@ -72,9 +73,14 @@ class Settings:
             database_path=_get_str("DATABASE_PATH", "assistente.db"),
             timezone=_get_str("TIMEZONE", "Europe/Lisbon"),
             # Nº máximo de mensagens mantidas em memória antes de resumir.
-            max_history_messages=_get_int("MAX_HISTORY_MESSAGES", 20),
+            # Cada mensagem é reenviada em todas as chamadas à API, por isso
+            # este valor é o principal regulador do custo por conversa.
+            max_history_messages=_get_int("MAX_HISTORY_MESSAGES", 12),
             # Quantas mensagens recentes ficam depois de um resumo.
-            history_keep_messages=_get_int("HISTORY_KEEP_MESSAGES", 8),
+            history_keep_messages=_get_int("HISTORY_KEEP_MESSAGES", 6),
+            # Minutos de silêncio ao fim dos quais uma conversa é resumida e
+            # arrumada, para não se perder se o processo morrer. 0 desliga.
+            idle_flush_minutes=_get_int("IDLE_FLUSH_MINUTES", 30),
             # Minutos de antecedência do lembrete automático de um evento.
             event_reminder_lead_minutes=_get_int("EVENT_REMINDER_LEAD_MINUTES", 15),
             # Lembretes que expiraram enquanto o bot esteve offline ainda são
