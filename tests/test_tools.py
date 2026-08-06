@@ -267,6 +267,18 @@ check("mensagens longas são partidas", len(blocos) > 1 and
       all(len(b) <= bot.TELEGRAM_MAX_LENGTH for b in blocos), f"{len(blocos)} blocos")
 check("mensagens curtas não são partidas", bot._split_message("olá") == ["olá"])
 
+# --- língua e memória de longo prazo ----------------------------------------
+bloco = llm.build_context_block(ctx.user_id)
+check("bloco de contexto força o inglês", bloco.rstrip().endswith("[answer in English]"), bloco.splitlines()[-1])
+check("regra da língua no topo da persona",
+      "LANGUAGE" in llm.build_system_prompt(ctx).splitlines()[2])
+
+db.save_summary(ctx.user_id, "resumo antigo em português")
+check("resumos podem ser apagados", db.delete_summaries(ctx.user_id) >= 1)
+check("memória de longo prazo vazia depois", db.get_latest_summary(ctx.user_id) is None)
+check("bloco de contexto sem memória não parte",
+      "[answer in English]" in llm.build_context_block(ctx.user_id))
+
 # --- controlo de acesso -----------------------------------------------------
 import asyncio  # noqa: E402
 import dataclasses  # noqa: E402

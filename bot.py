@@ -270,9 +270,27 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Arruma e limpa a memória de curto prazo, sem perder o que foi dito."""
+    """Arruma e limpa a memória de curto prazo.
+
+    Com o argumento `all`, apaga também a memória de longo prazo — útil quando
+    os resumos guardados ficaram desactualizados (ou na língua errada).
+    """
     ctx = _context_from(update)
-    # Resume antes de esquecer: o que foi dito fica na memória de longo prazo.
+    tudo = bool(context.args) and context.args[0].strip().lower() in {"all", "tudo"}
+
+    if tudo:
+        llm.reset_history(ctx.user_id)  # sem resumir: o objectivo é apagar
+        apagados = await asyncio.to_thread(db.delete_summaries, ctx.user_id)
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            f"Wiped. 🧹 Recent chat *and* {apagados} stored memory summar"
+            f"{'y' if apagados == 1 else 'ies'} are gone.\n"
+            "_Your events, notes and alerts are untouched._",
+        )
+        return
+
+    # Por omissão, resume antes de esquecer: nada do que foi dito se perde.
     await asyncio.to_thread(llm.flush_user, ctx.user_id)
     llm.reset_history(ctx.user_id)
     await send_text(
@@ -280,7 +298,8 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         ctx.chat_id,
         "Done — recent chat cleared. 🧹\n"
         "_Anything worth remembering was filed away first; your events, notes "
-        "and alerts are untouched._",
+        "and alerts are untouched._\n"
+        "_Use_ `/forget all` _to wipe long-term memory too._",
     )
 
 

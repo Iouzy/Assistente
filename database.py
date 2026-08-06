@@ -410,6 +410,13 @@ def get_latest_summary(user_id: int) -> Optional[str]:
         return row["summary"] if row else None
 
 
+def delete_summaries(user_id: int) -> int:
+    """Apaga toda a memória de longo prazo de um utilizador. Devolve quantos."""
+    with _cursor() as cur:
+        cur.execute("DELETE FROM summaries WHERE user_id = ?", (user_id,))
+        return cur.rowcount
+
+
 def prune_summaries(user_id: int, keep: int = 5) -> None:
     """Mantém apenas os `keep` resumos mais recentes (evita crescimento infinito)."""
     with _cursor() as cur:

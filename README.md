@@ -23,10 +23,15 @@ Tu:  actually push it to 4
 Bot: ✅ Moved to Friday, 7 August 2026 at 16:00 — alert now at 15:45.
 ```
 
-> **Língua:** o bot fala **inglês**. Foi uma escolha de custo — o inglês gasta
-> menos tokens do que o português, e o catálogo de ferramentas é reenviado em
-> todas as chamadas. Para o passar a português basta reescrever `_PERSONA` em
-> `llm.py`; nada mais no código depende da língua.
+> **Língua:** o bot fala **inglês**, mesmo quando lhe escreves em português —
+> percebe as duas. Foi uma escolha de custo: o inglês gasta menos tokens, e o
+> catálogo de ferramentas é reenviado em todas as chamadas.
+>
+> Manter isto exige mais do que uma linha no prompt, porque o instinto do
+> modelo é responder na língua em que lhe falam. A regra está no topo da
+> persona **e** repetida num `[answer in English]` colado a cada mensagem — a
+> posição mais forte do prompt, por ~6 tokens. Para o passar a português,
+> reescreve `_PERSONA` e essa etiqueta em `llm.py`.
 
 Ao contrário de um simples *chatbot*, o assistente:
 
@@ -91,6 +96,7 @@ Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
 | `/notes` | Notas mais recentes |
 | `/reminders` | Alertas por disparar |
 | `/forget` | Arruma e limpa a memória de curto prazo |
+| `/forget all` | Apaga também a memória de longo prazo |
 | `/help` | Ajuda |
 
 Os nomes portugueses (`/hoje`, `/notas`, `/lembretes`, `/esquecer`, `/ajuda`)
