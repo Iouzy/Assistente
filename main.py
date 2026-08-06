@@ -115,6 +115,14 @@ def main() -> int:
     )
     bot_module.register_handlers(application)
 
+    # No Python 3.14 `asyncio.get_event_loop()` deixou de criar um event loop
+    # quando não existe nenhum, passando a levantar RuntimeError. Garantimos que
+    # há um loop actual antes de entregar o controlo ao python-telegram-bot.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     logger.info("A iniciar o assistente (modelo %s)...", settings.deepseek_model)
     # run_polling trata do ciclo de vida do event loop e do encerramento gracioso.
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
