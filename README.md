@@ -76,9 +76,13 @@ Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
 **Cada toque responde direto da base de dados, sem uma única chamada à API.**
 
 ### Acesso
-- **Lista de utilizadores autorizados** (`ALLOWED_USER_IDS`): sem ela, um bot de
-  Telegram é público e qualquer pessoa pode gastar o teu saldo da API.
-- Os dados estão sempre isolados por utilizador, mesmo com o bot aberto.
+- **O bot fecha-se sozinho:** a primeira pessoa que lhe escrever fica registada
+  como dona, e mais ninguém consegue falar com ele.
+- **Partilha por comando:** `/allow <id>` e `/revoke <id>`, sem editar ficheiros
+  nem reiniciar — dá para modo família.
+- **Ou lista fixa** em `ALLOWED_USER_IDS`, para quem prefere a configuração no
+  ficheiro.
+- Os dados estão sempre isolados por utilizador: cada pessoa vê só a sua agenda.
 
 ### Robustez
 - Base de dados protegida por lock, segura entre a thread do bot e a do scheduler.
@@ -97,6 +101,9 @@ Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
 | `/reminders` | Alertas por disparar |
 | `/forget` | Arruma e limpa a memória de curto prazo |
 | `/forget all` | Apaga também a memória de longo prazo |
+| `/who` | O teu id do Telegram e quem tem acesso |
+| `/allow <id>` | Dá acesso a outra pessoa |
+| `/revoke <id>` | Retira o acesso |
 | `/help` | Ajuda |
 
 Os nomes portugueses (`/hoje`, `/notas`, `/lembretes`, `/esquecer`, `/ajuda`)
@@ -154,32 +161,53 @@ DEEPSEEK_API_KEY=sk-a-tua-chave-real
 
 As restantes são opcionais e estão documentadas no `.env.example`.
 
-### 3.4.1. Fechar o bot a estranhos (recomendado)
+### 3.4.1. Quem pode falar com o bot
 
 **Um bot de Telegram é público.** Qualquer pessoa que descubra o username pode
 escrever-lhe. Os dados estão isolados por utilizador — um estranho nunca veria
 a tua agenda, teria um assistente vazio só dele — mas **cada mensagem dele
 gastaria o saldo da tua conta DeepSeek**.
 
-Para o fechar:
+Há dois modos, e o primeiro não exige configuração nenhuma.
 
-1. Arranca o bot e envia-lhe uma mensagem qualquer.
-2. Procura o teu id nos registos:
-   ```
-   INFO | bot | Mensagem de Miguel (123456789): olá
-                                    ^^^^^^^^^ este número
-   ```
-3. Põe no `.env` e reinicia:
-   ```ini
-   ALLOWED_USER_IDS=123456789
-   ```
+#### Modo automático (por omissão)
 
-Vários utilizadores separam-se por vírgulas: `ALLOWED_USER_IDS=123456789,987654321`.
-Quem não estiver na lista recebe uma recusa educada e nada mais acontece — nem
-uma chamada à API.
+Deixa `ALLOWED_USER_IDS` vazio. **A primeira pessoa que escrever ao bot fica
+registada como dona** e o bot fecha-se sozinho:
 
-Sem esta variável definida o bot arranca à mesma, mas avisa nos registos que
-está aberto.
+```
+🔒 This assistant is now yours.
+You're registered as the owner (id 123456789) and nobody else can talk to me.
+```
+
+Daí em diante geres tudo pelo Telegram:
+
+| Comando | O que faz |
+|---|---|
+| `/who` | Mostra o teu id e a lista de quem tem acesso |
+| `/allow <id> [nome]` | Deixa entrar mais alguém |
+| `/revoke <id>` | Retira o acesso (o dono não pode ser retirado) |
+
+> ⚠️ Escreve ao bot **assim que o arrancares pela primeira vez**. Enquanto
+> ninguém o reclamar, quem escrever primeiro fica dono.
+
+**Para dar acesso a outra pessoa:** pede-lhe que te diga o id dela (o Telegram
+mostra-o em bots como o @userinfobot, ou aparece nos teus registos se ela
+tentar escrever ao teu bot) e faz `/allow 987654321 Ana`.
+
+#### Modo fixo (`.env`)
+
+Preencher a variável fixa a lista e desliga o `/allow` e o `/revoke`:
+
+```ini
+ALLOWED_USER_IDS=123456789,987654321
+```
+
+Faz mais sentido num servidor, onde se quer a configuração no ficheiro e não
+numa conversa. Para saberes o teu id, envia `/who` ao bot.
+
+Em qualquer dos modos, quem não estiver na lista recebe uma recusa educada e
+nada mais acontece — **nem uma chamada à API**.
 
 ### 3.5. Executar
 
@@ -516,7 +544,7 @@ Como reduzir ainda mais:
 | Lembretes à hora errada | `TIMEZONE` incorreto | `TIMEZONE=Europe/Lisbon` |
 | `ZoneInfoNotFoundError` | Base de fusos em falta | `pip install tzdata` |
 | Bot não responde | Processo parado ou token errado | Ver `assistente.log` |
-| «This is a private assistant…» | O teu id não está em `ALLOWED_USER_IDS` | Ver a secção 3.4.1 |
+| «This is a private assistant…» | Outra pessoa reclamou o bot primeiro | `/who` do lado dela e `/allow <o teu id>`; ou apagar a tabela `access` |
 
 ---
 

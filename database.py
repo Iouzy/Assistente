@@ -116,6 +116,15 @@ def init_db() -> None:
                 FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE
             );
 
+            -- Quem pode falar com o bot. Se estiver vazia e não houver
+            -- ALLOWED_USER_IDS no .env, o primeiro utilizador reclama o bot.
+            CREATE TABLE IF NOT EXISTS access (
+                user_id    INTEGER PRIMARY KEY,
+                label      TEXT    NOT NULL DEFAULT '',
+                is_owner   INTEGER NOT NULL DEFAULT 0,
+                granted_at TEXT    NOT NULL
+            );
+
             -- Preferências por utilizador (chave/valor).
             CREATE TABLE IF NOT EXISTS preferences (
                 user_id INTEGER NOT NULL,
@@ -430,6 +439,43 @@ def prune_summaries(user_id: int, keep: int = 5) -> None:
             """,
             (user_id, user_id, keep),
         )
+
+
+# ---------------------------------------------------------------------------
+# Controlo de acesso
+# ---------------------------------------------------------------------------
+def grant_access(user_id: int, label: str = "", is_owner: bool = False) -> None:
+    """Autoriza um utilizador a falar com o bot."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO access (user_id, label, is_owner, granted_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET label = excluded.label
+            """,
+            (user_id, label.strip(), 1 if is_owner else 0,
+             datetime.now(settings.tzinfo).isoformat()),
+        )
+
+
+def revoke_access(user_id: int) -> bool:
+    """Retira a autorização a um utilizador. O dono não pode ser retirado."""
+    with _cursor() as cur:
+        cur.execute("DELETE FROM access WHERE user_id = ? AND is_owner = 0", (user_id,))
+        return cur.rowcount > 0
+
+
+def list_access() -> list[dict[str, Any]]:
+    """Todos os utilizadores autorizados, o dono primeiro."""
+    with _cursor() as cur:
+        cur.execute("SELECT * FROM access ORDER BY is_owner DESC, granted_at ASC")
+        return [_row_to_dict(row) for row in cur.fetchall()]
+
+
+def allowed_user_ids() -> set[int]:
+    with _cursor() as cur:
+        cur.execute("SELECT user_id FROM access")
+        return {row["user_id"] for row in cur.fetchall()}
 
 
 # ---------------------------------------------------------------------------

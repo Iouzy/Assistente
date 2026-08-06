@@ -312,18 +312,47 @@ def _porteiro_deixa_passar(uid):
 
 
 _original = bot.settings
-bot.settings = dataclasses.replace(_original, allowed_user_ids=frozenset({111, 222}))
 
+# --- modo A: lista fixa no .env ---
+bot.settings = dataclasses.replace(_original, allowed_user_ids=frozenset({111, 222}))
 passou, _ = _porteiro_deixa_passar(111)
 check("porteiro deixa passar id autorizado", passou)
 passou, falso = _porteiro_deixa_passar(999)
 check("porteiro bloqueia id estranho", not passou)
 check("estranho recebe explicação", falso.enviadas and "private assistant" in falso.enviadas[0][1])
 
+# --- modo B: sem lista no .env, o primeiro a falar reclama o bot ---
 bot.settings = dataclasses.replace(_original, allowed_user_ids=frozenset())
-passou, _ = _porteiro_deixa_passar(999)
-check("sem lista, o bot fica aberto a todos", passou)
+bot.refresh_access_cache()
+check("base de dados começa sem dono", bot.autorizados() == set())
+
+passou, falso = _porteiro_deixa_passar(555)
+check("primeiro utilizador é deixado entrar", passou)
+check("primeiro utilizador fica dono", 555 in bot.autorizados(), str(bot.autorizados()))
+check("dono é avisado de que o bot é dele",
+      falso.enviadas and "now yours" in falso.enviadas[0][1])
+check("marcado como dono na base de dados",
+      [e for e in db.list_access() if e["user_id"] == 555][0]["is_owner"] == 1)
+
+passou, _ = _porteiro_deixa_passar(556)
+check("segundo utilizador já é bloqueado", not passou)
+
+# --- modo B: partilhar com mais pessoas ---
+db.grant_access(556, "Ana")
+bot.refresh_access_cache()
+passou, _ = _porteiro_deixa_passar(556)
+check("convidado passa a entrar", passou)
+check("convidado não é dono",
+      [e for e in db.list_access() if e["user_id"] == 556][0]["is_owner"] == 0)
+
+check("convidado pode ser retirado", db.revoke_access(556))
+bot.refresh_access_cache()
+passou, _ = _porteiro_deixa_passar(556)
+check("convidado retirado volta a ser bloqueado", not passou)
+check("dono NÃO pode ser retirado", not db.revoke_access(555))
+
 bot.settings = _original
+bot.refresh_access_cache()
 
 # --- encerramento -----------------------------------------------------------
 scheduler.shutdown(wait=True)

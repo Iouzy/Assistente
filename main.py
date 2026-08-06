@@ -37,6 +37,7 @@ BOT_COMMANDS = [
     BotCommand("notes", "Most recent notes"),
     BotCommand("reminders", "Alerts not yet fired"),
     BotCommand("forget", "Clear our recent chat"),
+    BotCommand("who", "Your id and who has access"),
     BotCommand("help", "How to use the assistant"),
 ]
 
@@ -113,14 +114,19 @@ async def on_startup(application: Application) -> None:
     me = await application.bot.get_me()
     logger.info("Assistente online como @%s.", me.username)
 
+    permitidos = bot_module.refresh_access_cache()
     if settings.allowed_user_ids:
-        logger.info("Acesso restrito a %d utilizador(es).", len(settings.allowed_user_ids))
+        logger.info(
+            "Acesso restrito a %d utilizador(es), pela lista do .env.",
+            len(settings.allowed_user_ids),
+        )
+    elif permitidos:
+        logger.info("Acesso restrito a %d utilizador(es), pela base de dados.", len(permitidos))
     else:
         logger.warning(
-            "ATENÇÃO: o bot está ABERTO — qualquer pessoa que descubra @%s pode "
-            "falar com ele e gastar o saldo da API. Para o fechar, envie-lhe uma "
-            "mensagem, procure o seu id nos registos ('Mensagem de ... (ID)') e "
-            "ponha ALLOWED_USER_IDS=<id> no ficheiro .env.",
+            "O bot ainda não tem dono. A PRIMEIRA pessoa que lhe escrever fica "
+            "registada como dono e o bot passa a privado — escreva-lhe já, antes "
+            "que outra pessoa descubra o @%s.",
             me.username,
         )
 

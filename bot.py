@@ -85,7 +85,10 @@ HELP = (
     "📝 /notes — most recent notes\n"
     "⏰ /reminders — alerts not yet fired\n"
     "🧹 /forget — clear our recent chat from my short-term memory\n"
+    "🪪 /who — your Telegram id and who else has access\n"
     "❓ /help — this message\n\n"
+    "*Sharing*\n"
+    "`/allow <id> [name]` lets someone else in · `/revoke <id>` takes it back\n\n"
     "_The buttons answer straight from the database, so they're free._"
 )
 
@@ -98,14 +101,64 @@ HELP = (
 # veria a agenda de outra pessoa — mas cada mensagem dele gastaria saldo da
 # API. `ALLOWED_USER_IDS` fecha a porta.
 # ---------------------------------------------------------------------------
+# Cache em memória da lista da base de dados: o porteiro corre em cada
+# actualização e não vale a pena tocar no disco de cada vez.
+_acesso_cache: set[int] = set()
+
+
+def refresh_access_cache() -> set[int]:
+    """Relê da base de dados quem está autorizado."""
+    global _acesso_cache
+    _acesso_cache = db.allowed_user_ids()
+    return _acesso_cache
+
+
+def autorizados() -> set[int]:
+    """Lista efectiva: o `.env` manda; senão, a base de dados."""
+    if settings.allowed_user_ids:
+        return set(settings.allowed_user_ids)
+    return _acesso_cache
+
+
 async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Corre antes de tudo o resto; interrompe o processamento a estranhos."""
-    if not settings.allowed_user_ids:
-        return  # sem lista definida, o bot está aberto (avisado no arranque)
-
     user = update.effective_user
-    if user is None or user.id in settings.allowed_user_ids:
+    if user is None:
         return
+
+    # O `.env` tem a última palavra, se estiver preenchido.
+    if settings.allowed_user_ids:
+        if user.id in settings.allowed_user_ids:
+            return
+    else:
+        permitidos = _acesso_cache
+        if not permitidos:
+            # Ninguém reclamou o bot ainda: o primeiro a falar fica dono. É a
+            # forma de fechar o bot sem obrigar a caçar ids nos registos.
+            await asyncio.to_thread(
+                db.grant_access, user.id, user.first_name or "", True
+            )
+            refresh_access_cache()
+            logger.warning(
+                "Bot reclamado por %s (id %s, @%s) — passa a ser privado.",
+                user.first_name or "?",
+                user.id,
+                user.username or "sem username",
+            )
+            chat = update.effective_chat
+            if chat is not None:
+                await send_text(
+                    context.bot,
+                    chat.id,
+                    "🔒 *This assistant is now yours.*\n\n"
+                    f"You're registered as the owner (id `{user.id}`) and nobody "
+                    "else can talk to me.\n\n"
+                    "_Use_ `/allow <id>` _to let someone else in, or_ `/who` "
+                    "_to see the list._",
+                )
+            return
+        if user.id in permitidos:
+            return
 
     logger.warning(
         "Acesso recusado a %s (id %s, @%s).",
@@ -304,6 +357,106 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 # ---------------------------------------------------------------------------
+# Gestão de acesso
+# ---------------------------------------------------------------------------
+async def cmd_who(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mostra o teu id e quem mais tem acesso."""
+    ctx = _context_from(update)
+
+    linhas = [f"🪪 Your Telegram id is `{ctx.user_id}`.\n"]
+    if settings.allowed_user_ids:
+        linhas.append("*Access list* (from `ALLOWED_USER_IDS` in .env)")
+        linhas += [f"• `{uid}`" for uid in sorted(settings.allowed_user_ids)]
+        linhas.append("\n_Managed in the .env file, not with_ `/allow`.")
+    else:
+        entradas = await asyncio.to_thread(db.list_access)
+        if entradas:
+            linhas.append("*Access list*")
+            for entrada in entradas:
+                etiqueta = entrada["label"] or "unnamed"
+                marca = " 👑 owner" if entrada["is_owner"] else ""
+                linhas.append(f"• `{entrada['user_id']}` — {etiqueta}{marca}")
+            linhas.append("\n_Use_ `/allow <id> [name]` _or_ `/revoke <id>`_._")
+        else:
+            linhas.append("⚠️ *Nobody has claimed this bot yet — it's open to anyone.*")
+
+    await send_text(context.bot, ctx.chat_id, "\n".join(linhas))
+
+
+async def cmd_allow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Autoriza outra pessoa a usar o bot."""
+    ctx = _context_from(update)
+
+    if settings.allowed_user_ids:
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            "Access is pinned by `ALLOWED_USER_IDS` in the .env file — "
+            "edit it there and restart.",
+        )
+        return
+
+    if not context.args:
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            "Usage: `/allow <telegram id> [name]`\n\n"
+            "_They can find their id by sending_ `/who` _to any bot that shows it — "
+            "or just have them message me once and read the id from the logs._",
+        )
+        return
+
+    try:
+        novo_id = int(context.args[0])
+    except ValueError:
+        await send_text(context.bot, ctx.chat_id, f"`{context.args[0]}` is not a numeric id.")
+        return
+
+    etiqueta = " ".join(context.args[1:]).strip()
+    await asyncio.to_thread(db.grant_access, novo_id, etiqueta, False)
+    refresh_access_cache()
+    logger.info("Utilizador %s autorizado por %s.", novo_id, ctx.user_id)
+    await send_text(
+        context.bot, ctx.chat_id, f"✅ `{novo_id}`{f' ({etiqueta})' if etiqueta else ''} can now talk to me."
+    )
+
+
+async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Retira o acesso a alguém (o dono não pode ser retirado)."""
+    ctx = _context_from(update)
+
+    if settings.allowed_user_ids:
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            "Access is pinned by `ALLOWED_USER_IDS` in the .env file — "
+            "edit it there and restart.",
+        )
+        return
+
+    if not context.args:
+        await send_text(context.bot, ctx.chat_id, "Usage: `/revoke <telegram id>`")
+        return
+
+    try:
+        alvo = int(context.args[0])
+    except ValueError:
+        await send_text(context.bot, ctx.chat_id, f"`{context.args[0]}` is not a numeric id.")
+        return
+
+    removido = await asyncio.to_thread(db.revoke_access, alvo)
+    refresh_access_cache()
+    if removido:
+        await send_text(context.bot, ctx.chat_id, f"✅ `{alvo}` can no longer talk to me.")
+    else:
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            f"`{alvo}` isn't on the list — or is the owner, who can't be removed.",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Botões do menu
 # ---------------------------------------------------------------------------
 _BUTTON_ROUTES = {
@@ -396,6 +549,9 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler(["notes", "notas"], cmd_notes))
     application.add_handler(CommandHandler(["reminders", "lembretes"], cmd_reminders))
     application.add_handler(CommandHandler(["forget", "esquecer"], cmd_forget))
+    application.add_handler(CommandHandler(["who", "whoami", "quem"], cmd_who))
+    application.add_handler(CommandHandler("allow", cmd_allow))
+    application.add_handler(CommandHandler("revoke", cmd_revoke))
 
     # Os botões têm de ser interceptados ANTES do handler genérico de texto,
     # senão o seu conteúdo seguia para o modelo e custava tokens.
