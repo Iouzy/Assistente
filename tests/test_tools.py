@@ -202,8 +202,8 @@ check("delete_item recusa tipo inválido",
 novo = tools.execute_tool("add_event", {"date": "amanhã às 11h",
                                         "description": "Reunião a cancelar"}, ctx)
 ev_id = novo["event"]["id"]
-check("evento criado com lembrete", len(db.get_reminders_for_event(ev_id)) == 1)
-rem_id = db.get_reminders_for_event(ev_id)[0]["id"]
+check("evento criado com lembrete", len(db.get_reminders_for_event(ctx.user_id, ev_id)) == 1)
+rem_id = db.get_reminders_for_event(ctx.user_id, ev_id)[0]["id"]
 tools.execute_tool("delete_item", {"kind": "event", "id": ev_id}, ctx)
 check("evento apagado", db.get_event(ev_id) is None)
 check("lembrete do evento apagado em cascata", db.get_reminder(rem_id) is None)
@@ -212,14 +212,14 @@ check("job do lembrete cancelado", not scheduler.cancel_reminder(rem_id))
 # --- remarcar (ferramenta update_event) ------------------------------------
 alvo = tools.execute_tool("add_event", {"date": "amanhã às 9h",
                                         "description": "Dentista"}, ctx)["event"]["id"]
-antigo_rem = db.get_reminders_for_event(alvo)[0]["id"]
+antigo_rem = db.get_reminders_for_event(ctx.user_id, alvo)[0]["id"]
 
 r = tools.execute_tool("update_event", {"id": alvo, "date": "amanhã às 16h"}, ctx)
 check("update_event muda a hora", r["status"] == "ok" and "16:00" in r["event"]["when"],
       r.get("event", {}).get("when", r.get("error", "")))
 check("update_event mantém a descrição", r["event"]["description"] == "Dentista")
 check("update_event substitui o lembrete antigo", db.get_reminder(antigo_rem) is None)
-check("update_event cria lembrete novo", len(db.get_reminders_for_event(alvo)) == 1)
+check("update_event cria lembrete novo", len(db.get_reminders_for_event(ctx.user_id, alvo)) == 1)
 check("novo lembrete é 15 min antes", "15:45" in r["reminder"]["at"], r["reminder"]["at"])
 
 r = tools.execute_tool("update_event", {"id": alvo, "description": "Dentista (Dr. Silva)"}, ctx)
@@ -302,6 +302,19 @@ def _actualizacao(uid):
     )
 
 
+def _actualizacao_sem_utilizador(tipo="channel"):
+    """Uma actualização que não identifica ninguém — uma publicação num canal.
+
+    O porteiro tem de a descartar. Enquanto devolvia o controlo em vez de
+    interromper, bastava meter o bot num canal para lhe chegar aos comandos
+    todos sem estar autorizado.
+    """
+    return types.SimpleNamespace(
+        effective_user=None,
+        effective_chat=types.SimpleNamespace(id=-1001234567890, type=tipo),
+    )
+
+
 def _porteiro_deixa_passar(uid):
     falso = _BotFalso()
     try:
@@ -319,23 +332,39 @@ passou, _ = _porteiro_deixa_passar(111)
 check("porteiro deixa passar id autorizado", passou)
 passou, falso = _porteiro_deixa_passar(999)
 check("porteiro bloqueia id estranho", not passou)
-check("estranho recebe explicação", falso.enviadas and "private assistant" in falso.enviadas[0][1])
+check("estranho não recebe resposta nenhuma", falso.enviadas == [])
 
-# --- modo B: sem lista no .env, o primeiro a falar reclama o bot ---
+# Sem remetente não há como autorizar: descartar, não deixar passar.
+falso = _BotFalso()
+try:
+    asyncio.run(bot.guard_access(_actualizacao_sem_utilizador(),
+                                 types.SimpleNamespace(bot=falso)))
+    _bloqueou_canal = False
+except ApplicationHandlerStop:
+    _bloqueou_canal = True
+check("porteiro descarta actualização sem utilizador (canal)", _bloqueou_canal)
+check("canal não recebe resposta nenhuma", falso.enviadas == [])
+
+# --- modo B: a lista vem da base de dados ---
 bot.settings = dataclasses.replace(_original, allowed_user_ids=frozenset())
 bot.refresh_access_cache()
-check("base de dados começa sem dono", bot.autorizados() == set())
+check("base de dados começa sem ninguém", bot.autorizados() == set())
 
 passou, falso = _porteiro_deixa_passar(555)
-check("primeiro utilizador é deixado entrar", passou)
-check("primeiro utilizador fica dono", 555 in bot.autorizados(), str(bot.autorizados()))
-check("dono é avisado de que o bot é dele",
-      falso.enviadas and "now yours" in falso.enviadas[0][1])
-check("marcado como dono na base de dados",
-      [e for e in db.list_access() if e["user_id"] == 555][0]["is_owner"] == 1)
+check("sem lista, ninguém entra", not passou)
+check("quem escreve primeiro NÃO fica dono", 555 not in bot.autorizados())
+check("quem escreve primeiro não recebe resposta", falso.enviadas == [])
+check("nada foi gravado na base de dados", db.list_access() == [])
+
+# O dono é definido de fora (painel ou .env), nunca pela conversa.
+db.grant_access(555, "Miguel", True)
+bot.refresh_access_cache()
+passou, _ = _porteiro_deixa_passar(555)
+check("dono definido por fora entra", passou)
+check("dono é reconhecido como dono", bot.e_dono(555))
 
 passou, _ = _porteiro_deixa_passar(556)
-check("segundo utilizador já é bloqueado", not passou)
+check("estranho continua bloqueado", not passou)
 
 # --- modo B: partilhar com mais pessoas ---
 db.grant_access(556, "Ana")
@@ -344,11 +373,18 @@ passou, _ = _porteiro_deixa_passar(556)
 check("convidado passa a entrar", passou)
 check("convidado não é dono",
       [e for e in db.list_access() if e["user_id"] == 556][0]["is_owner"] == 0)
+check("convidado NÃO pode gerir acessos", not bot.e_dono(556))
 
+# Tirar o acesso tem de calar também os lembretes já agendados.
+_rem_ana = db.create_reminder(556, 556, "aviso da Ana",
+                              datetime.now(settings.tzinfo) + timedelta(hours=3))
+check("convidado tem um lembrete por disparar", db.pending_reminder_ids(556) == [_rem_ana])
 check("convidado pode ser retirado", db.revoke_access(556))
 bot.refresh_access_cache()
 passou, _ = _porteiro_deixa_passar(556)
 check("convidado retirado volta a ser bloqueado", not passou)
+check("lembretes de quem perdeu o acesso não disparam",
+      db.get_reminder(_rem_ana)["fired"] == 1)
 check("dono NÃO pode ser retirado", not db.revoke_access(555))
 
 bot.settings = _original

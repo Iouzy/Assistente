@@ -29,8 +29,35 @@ logger = logging.getLogger(__name__)
 # Assinatura do notificador: (chat_id, texto) -> None. Tem de ser thread-safe.
 Notifier = Callable[[int, str], None]
 
+# Devolve o conjunto de utilizadores autorizados. É injectada pelo `main.py`
+# para o scheduler não ter de importar o `bot` (que importa o `scheduler`).
+AccessCheck = Callable[[], set]
+
 _scheduler: Optional[BackgroundScheduler] = None
 _notifier: Optional[Notifier] = None
+_access_check: Optional[AccessCheck] = None
+
+
+def set_access_check(verificacao: Optional[AccessCheck]) -> None:
+    """Define como o scheduler confirma que o destinatário ainda tem acesso."""
+    global _access_check
+    _access_check = verificacao
+
+
+def _pode_receber(user_id: int) -> bool:
+    """Confirma que o destinatário continua autorizado.
+
+    Um lembrete é agendado com horas ou dias de antecedência; entretanto o
+    acesso pode ter sido retirado. Sem esta verificação, tirar a permissão a
+    alguém não calava o bot — ele continuava a mandar-lhe mensagens.
+    """
+    if _access_check is None:
+        return True
+    try:
+        return user_id in _access_check()
+    except Exception:  # noqa: BLE001 — na dúvida, não enviar
+        logger.exception("Não foi possível confirmar o acesso do utilizador %s.", user_id)
+        return False
 
 
 def _job_id(reminder_id: int) -> str:
@@ -142,6 +169,17 @@ def restore_pending_reminders() -> int:
     restored = 0
 
     for reminder in db.get_pending_reminders():
+        # Lembretes de quem perdeu o acesso enquanto o bot esteve desligado
+        # não voltam a ser agendados.
+        if not _pode_receber(int(reminder["user_id"])):
+            logger.info(
+                "Lembrete #%s ignorado: o utilizador %s já não tem acesso.",
+                reminder["id"],
+                reminder["user_id"],
+            )
+            db.mark_reminder_fired(reminder["id"])
+            continue
+
         try:
             remind_at = datetime.fromisoformat(reminder["remind_at"])
         except ValueError:
@@ -202,6 +240,15 @@ def _fire_reminder(reminder_id: int, late: bool = False) -> None:
             return
         if reminder["fired"]:
             logger.debug("Lembrete #%s já tinha sido enviado.", reminder_id)
+            return
+
+        if not _pode_receber(int(reminder["user_id"])):
+            logger.info(
+                "Lembrete #%s não enviado: o utilizador %s já não tem acesso.",
+                reminder_id,
+                reminder["user_id"],
+            )
+            db.mark_reminder_fired(reminder_id)
             return
 
         if _notifier is None:

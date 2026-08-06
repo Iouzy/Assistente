@@ -15,12 +15,15 @@ correctas dentro do mesmo fuso e evita ambiguidades no horário de verão.
 from __future__ import annotations
 
 import logging
+import os
+import pathlib
 import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterator, Optional
 
+import safety
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -29,6 +32,32 @@ logger = logging.getLogger(__name__)
 _lock = threading.RLock()
 _connection: Optional[sqlite3.Connection] = None
 
+# Depois de `close_db()` a ligação não volta a abrir sozinha. Sem isto, uma
+# tarefa do scheduler que ainda estivesse a correr durante o encerramento
+# reabria a base de dados a seguir a ela ter sido fechada.
+_closed = False
+
+
+class DatabaseClosed(RuntimeError):
+    """Levantada quando se tenta usar a base de dados depois do encerramento."""
+
+
+def _restringir_permissoes(caminho: str) -> None:
+    """Deixa o ficheiro legível só pelo dono (0600), quando o SO o permite.
+
+    A base de dados tem a agenda, as notas e os resumos das conversas; por
+    omissão era criada a 0644, ou seja, legível por qualquer conta da máquina.
+    Em Windows o `chmod` do Python não faz nada de útil — lá a protecção é a
+    ACL da pasta do utilizador —, por isso a falha é ignorada em silêncio.
+    """
+    for sufixo in ("", "-wal", "-shm"):
+        ficheiro = pathlib.Path(caminho + sufixo)
+        try:
+            if ficheiro.exists():
+                os.chmod(ficheiro, 0o600)
+        except OSError:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Infra-estrutura
@@ -36,7 +65,15 @@ _connection: Optional[sqlite3.Connection] = None
 def _connect() -> sqlite3.Connection:
     """Cria (ou devolve) a ligação partilhada à base de dados."""
     global _connection
+    if _closed:
+        raise DatabaseClosed("A base de dados já foi fechada.")
     if _connection is None:
+        # Cria o ficheiro já com as permissões certas, em vez de o criar aberto
+        # e apertar a seguir (entre as duas coisas havia uma janela de leitura).
+        caminho = pathlib.Path(settings.database_path)
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        if not caminho.exists():
+            os.close(os.open(caminho, os.O_CREAT | os.O_WRONLY, 0o600))
         _connection = sqlite3.connect(
             settings.database_path,
             check_same_thread=False,  # partilhada entre threads, protegida por _lock
@@ -47,6 +84,8 @@ def _connect() -> sqlite3.Connection:
         _connection.execute("PRAGMA journal_mode=WAL")
         _connection.execute("PRAGMA foreign_keys=ON")
         _connection.execute("PRAGMA synchronous=NORMAL")
+        # O modo WAL cria os ficheiros -wal e -shm: também eles têm conteúdo.
+        _restringir_permissoes(settings.database_path)
     return _connection
 
 
@@ -117,7 +156,8 @@ def init_db() -> None:
             );
 
             -- Quem pode falar com o bot. Se estiver vazia e não houver
-            -- ALLOWED_USER_IDS no .env, o primeiro utilizador reclama o bot.
+            -- ALLOWED_USER_IDS no .env, o bot não responde a ninguém: os ids
+            -- são acrescentados de propósito, pelo painel ou pelo dono.
             CREATE TABLE IF NOT EXISTS access (
                 user_id    INTEGER PRIMARY KEY,
                 label      TEXT    NOT NULL DEFAULT '',
@@ -147,12 +187,25 @@ def init_db() -> None:
 
 
 def close_db() -> None:
-    """Fecha a ligação partilhada (usado no encerramento)."""
-    global _connection
+    """Fecha a ligação partilhada (usado no encerramento).
+
+    A partir daqui qualquer acesso levanta `DatabaseClosed`, em vez de reabrir
+    a base de dados às escondidas — quem chegar atrasado tem de falhar de
+    forma visível, não escrever num ficheiro que já ninguém vai fechar.
+    """
+    global _connection, _closed
     with _lock:
+        _closed = True
         if _connection is not None:
             _connection.close()
             _connection = None
+
+
+def reopen_db() -> None:
+    """Reabre a base de dados depois de um `close_db()` (usado nos testes)."""
+    global _closed
+    with _lock:
+        _closed = False
 
 
 # ---------------------------------------------------------------------------
@@ -269,13 +322,36 @@ def update_event(
         return cur.rowcount > 0
 
 
-def get_reminders_for_event(event_id: int) -> list[dict[str, Any]]:
-    """Lembretes por disparar associados a um evento."""
+def get_reminders_for_event(user_id: int, event_id: int) -> list[dict[str, Any]]:
+    """Lembretes por disparar de um evento, restritos ao dono dos dados.
+
+    O `user_id` não é decorativo: sem ele, saber o id de um evento bastava
+    para mexer nos lembretes de outra pessoa.
+    """
     with _cursor() as cur:
         cur.execute(
-            "SELECT * FROM reminders WHERE event_id = ? AND fired = 0", (event_id,)
+            "SELECT * FROM reminders WHERE event_id = ? AND user_id = ? AND fired = 0",
+            (event_id, user_id),
         )
         return [_row_to_dict(row) for row in cur.fetchall()]
+
+
+def event_belongs_to(user_id: int, event_id: int) -> bool:
+    """True se o evento existir e for mesmo desta pessoa."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM events WHERE id = ? AND user_id = ?", (event_id, user_id)
+        )
+        return cur.fetchone() is not None
+
+
+def reminder_belongs_to(user_id: int, reminder_id: int) -> bool:
+    """True se o lembrete existir e for mesmo desta pessoa."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user_id)
+        )
+        return cur.fetchone() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +521,12 @@ def prune_summaries(user_id: int, keep: int = 5) -> None:
 # Controlo de acesso
 # ---------------------------------------------------------------------------
 def grant_access(user_id: int, label: str = "", is_owner: bool = False) -> None:
-    """Autoriza um utilizador a falar com o bot."""
+    """Autoriza um utilizador a falar com o bot.
+
+    A etiqueta é escrita por quem convida e é mostrada a outras pessoas no
+    `/who`, por isso é cortada aqui — o escape de Markdown é feito na
+    apresentação, em `bot.py`.
+    """
     with _cursor() as cur:
         cur.execute(
             """
@@ -453,16 +534,46 @@ def grant_access(user_id: int, label: str = "", is_owner: bool = False) -> None:
             VALUES (?, ?, ?, ?)
             ON CONFLICT (user_id) DO UPDATE SET label = excluded.label
             """,
-            (user_id, label.strip(), 1 if is_owner else 0,
+            (user_id, safety.limitar(label, safety.MAX_ETIQUETA), 1 if is_owner else 0,
              datetime.now(settings.tzinfo).isoformat()),
         )
 
 
 def revoke_access(user_id: int) -> bool:
-    """Retira a autorização a um utilizador. O dono não pode ser retirado."""
+    """Retira a autorização a um utilizador. O dono não pode ser retirado.
+
+    Os lembretes por disparar dessa pessoa são marcados como disparados: tirar
+    o acesso tem de calar o bot para ela, e não apenas impedi-la de escrever.
+    Quem chamar deve cancelar também os jobs no scheduler.
+    """
     with _cursor() as cur:
         cur.execute("DELETE FROM access WHERE user_id = ? AND is_owner = 0", (user_id,))
-        return cur.rowcount > 0
+        if cur.rowcount == 0:
+            return False
+        cur.execute("UPDATE reminders SET fired = 1 WHERE user_id = ? AND fired = 0", (user_id,))
+        return True
+
+
+def is_owner(user_id: int) -> bool:
+    """True se este utilizador for o dono registado na base de dados."""
+    with _cursor() as cur:
+        cur.execute("SELECT is_owner FROM access WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        return bool(row and row["is_owner"])
+
+
+def has_owner() -> bool:
+    """True se já houver um dono definido."""
+    with _cursor() as cur:
+        cur.execute("SELECT 1 FROM access WHERE is_owner = 1 LIMIT 1")
+        return cur.fetchone() is not None
+
+
+def pending_reminder_ids(user_id: int) -> list[int]:
+    """Ids dos lembretes por disparar de um utilizador (para cancelar os jobs)."""
+    with _cursor() as cur:
+        cur.execute("SELECT id FROM reminders WHERE user_id = ? AND fired = 0", (user_id,))
+        return [int(row["id"]) for row in cur.fetchall()]
 
 
 def list_access() -> list[dict[str, Any]]:
@@ -481,14 +592,45 @@ def allowed_user_ids() -> set[int]:
 # ---------------------------------------------------------------------------
 # Preferências
 # ---------------------------------------------------------------------------
-def set_preference(user_id: int, key: str, value: str) -> None:
+class TooManyPreferences(RuntimeError):
+    """Levantada quando se tenta passar do número máximo de preferências."""
+
+
+def count_preferences(user_id: int) -> int:
     with _cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS total FROM preferences WHERE user_id = ?", (user_id,))
+        return int(cur.fetchone()["total"])
+
+
+def set_preference(user_id: int, key: str, value: str) -> None:
+    """Guarda uma preferência, respeitando os limites de número e tamanho.
+
+    As preferências entram no prompt de *todas* as chamadas à API. Sem tecto,
+    uma conversa podia enchê-las até o pedido ficar enorme — e caro — para
+    sempre, porque elas ficam gravadas.
+    """
+    key = key.strip()[: settings.max_preference_length]
+    value = value.strip()[: settings.max_preference_length]
+
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM preferences WHERE user_id = ? AND key = ?", (user_id, key)
+        )
+        ja_existe = cur.fetchone() is not None
+        if not ja_existe:
+            cur.execute(
+                "SELECT COUNT(*) AS total FROM preferences WHERE user_id = ?", (user_id,)
+            )
+            if int(cur.fetchone()["total"]) >= settings.max_preferences:
+                raise TooManyPreferences(
+                    f"Já estão guardadas {settings.max_preferences} preferências."
+                )
         cur.execute(
             """
             INSERT INTO preferences (user_id, key, value) VALUES (?, ?, ?)
             ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value
             """,
-            (user_id, key.strip(), value.strip()),
+            (user_id, key, value),
         )
 
 

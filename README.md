@@ -76,14 +76,17 @@ Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
 **Cada toque responde direto da base de dados, sem uma única chamada à API.**
 
 ### Acesso
-- **O bot fecha-se sozinho:** a primeira pessoa que lhe escrever fica registada
-  como dona, e mais ninguém consegue falar com ele.
-- **Partilha por comando:** `/allow <id>` e `/revoke <id>`, sem editar ficheiros
-  nem reiniciar — dá para modo família.
-- **Ou pelo painel do Windows:** o botão «Utilizadores» dá e retira permissões
-  numa janela, com o bot ligado ou desligado.
-- **Ou lista fixa** em `ALLOWED_USER_IDS`, para quem prefere a configuração no
-  ficheiro.
+- **Fechado por omissão:** o bot só responde a ids autorizados de propósito.
+  A quem não estiver autorizado não responde *nada* — nem sequer uma recusa.
+- **Ninguém fica dono por escrever primeiro.** O primeiro id é acrescentado por
+  si, no painel do Windows (botão «Utilizadores») ou em `ALLOWED_USER_IDS`.
+- **Partilha por comando, só pelo dono:** `/allow <id>` e `/revoke <id>`, sem
+  editar ficheiros nem reiniciar — dá para modo família. Quem foi convidado
+  usa o bot, mas não pode convidar mais ninguém.
+- **Retirar o acesso cala mesmo o bot:** os lembretes já agendados dessa pessoa
+  são cancelados, em vez de continuarem a chegar-lhe.
+- **Só em conversa privada.** Em grupos e canais o bot não responde: os dados
+  são pessoais e um `/notes` num grupo mostrava-os a toda a gente.
 - Os dados estão sempre isolados por utilizador: cada pessoa vê só a sua agenda.
 
 ### Robustez
@@ -170,44 +173,53 @@ escrever-lhe. Os dados estão isolados por utilizador — um estranho nunca veri
 a tua agenda, teria um assistente vazio só dele — mas **cada mensagem dele
 gastaria o saldo da tua conta DeepSeek**.
 
-Há dois modos, e o primeiro não exige configuração nenhuma.
+**Regra da casa: o bot só fala com quem foi autorizado de propósito.** A quem
+não estiver na lista ele não responde coisa nenhuma — nem uma recusa. E
+**ninguém fica dono por escrever primeiro**: o primeiro id tens de o pôr tu.
 
-#### Modo automático (por omissão)
+> Isto é diferente de versões anteriores, em que a primeira pessoa a escrever
+> ficava registada como dona. Bastava alguém descobrir o username antes de ti.
 
-Deixa `ALLOWED_USER_IDS` vazio. **A primeira pessoa que escrever ao bot fica
-registada como dona** e o bot fecha-se sozinho:
+Há duas maneiras de gerir a lista, e é o `ALLOWED_USER_IDS` que decide qual.
 
-```
-🔒 This assistant is now yours.
-You're registered as the owner (id 123456789) and nobody else can talk to me.
-```
+#### Modo base de dados (`ALLOWED_USER_IDS` vazio)
+
+Autoriza-te a ti primeiro, pelo painel do Windows — botão **👥 Utilizadores**
+(secção 3.7): escreve o teu id, dá-lhe um nome e carrega em **Adicionar**. O
+primeiro id da lista fica **dono**. (Para saberes o teu id, manda uma mensagem
+ao @userinfobot.)
 
 Daí em diante geres tudo pelo Telegram:
 
-| Comando | O que faz |
-|---|---|
-| `/who` | Mostra o teu id e a lista de quem tem acesso |
-| `/allow <id> [nome]` | Deixa entrar mais alguém |
-| `/revoke <id>` | Retira o acesso (o dono não pode ser retirado) |
+| Comando | O que faz | Quem pode |
+|---|---|---|
+| `/who` | Mostra o teu id e a lista de quem tem acesso | Qualquer autorizado |
+| `/allow <id> [nome]` | Deixa entrar mais alguém | **Só o dono** |
+| `/revoke <id>` | Retira o acesso (o dono não pode ser retirado) | **Só o dono** |
 
-> ⚠️ Escreve ao bot **assim que o arrancares pela primeira vez**. Enquanto
-> ninguém o reclamar, quem escrever primeiro fica dono.
+Quem foi convidado usa o assistente normalmente, mas não pode convidar mais
+ninguém nem tirar o acesso a quem quer que seja. Retirar o acesso a alguém
+cancela também os lembretes que essa pessoa tivesse agendados.
 
-**Para dar acesso a outra pessoa:** pede-lhe que te diga o id dela (o Telegram
-mostra-o em bots como o @userinfobot, ou aparece nos teus registos se ela
-tentar escrever ao teu bot) e faz `/allow 987654321 Ana`.
+Enquanto a lista estiver vazia o bot arranca mudo e diz-lo no registo:
 
-#### Pelo painel do Windows (sem ser pelo Telegram)
+```
+Ninguém está autorizado: o assistente vai ignorar todas as mensagens, sem
+responder. Autorize o seu id no painel de controlo («Utilizadores») ou
+preencha ALLOWED_USER_IDS no .env.
+```
 
-O botão **👥 Utilizadores** do painel (secção 3.7) abre a mesma lista numa
-janela: escreve o id, dá-lhe um nome e carrega em **Adicionar**. Também dá para
-**Remover** e para **Tornar dono**.
+#### Modo lista fixa (`ALLOWED_USER_IDS` preenchido)
+
+`ALLOWED_USER_IDS=123456789,987654321` fixa a lista e desliga o `/allow` e o
+`/revoke` — a lista passa a mudar-se só no ficheiro, com reinício. É o mais
+adequado num servidor.
 
 |  | Telegram (`/allow`) | Painel |
 |---|---|---|
-| Dar e retirar acesso | ✅ | ✅ |
+| Dar e retirar acesso | ✅ (só o dono) | ✅ |
 | Mudar o dono | ❌ | ✅ |
-| Funciona antes de o bot arrancar pela primeira vez | ❌ | ✅ |
+| Autorizar o primeiro id | ❌ | ✅ |
 | Funciona sem o computador ao pé | ✅ | ❌ |
 
 É a mesma tabela da base de dados nos dois casos, por isso as duas vias podem
@@ -258,17 +270,22 @@ RAM é resumida e gravada antes de encerrar.
 
 ### 3.6. Testes (opcional)
 
-Dois conjuntos de testes que **não gastam um único token da API** — o cliente
+Quatro conjuntos de testes que **não gastam um único token da API** — o cliente
 DeepSeek é substituído por um duplo de teste:
 
 ```bash
-python tests/test_tools.py   # datas, as 10 ferramentas, BD, lembretes reais
-python tests/test_llm.py     # tool calling, cache, memória, ponte scheduler↔asyncio
-python tests/test_acessos.py # permissões geridas pelo painel (não abre janelas)
+python tests/test_tools.py     # datas, as 10 ferramentas, BD, lembretes reais
+python tests/test_llm.py       # tool calling, cache, memória, ponte scheduler↔asyncio
+python tests/test_acessos.py   # permissões geridas pelo painel (não abre janelas)
+python tests/test_seguranca.py # porteiro, posse dos dados, saneamento, limites
 ```
 
-São 179 verificações e correm em cerca de 30 segundos (esperam pelo disparo
-real de lembretes).
+Correm em cerca de 30 segundos (esperam pelo disparo real de lembretes).
+
+O `test_seguranca.py` está escrito do ponto de vista de quem ataca: cada bloco
+corresponde a uma falha concreta que existiu, e passa quando o abuso deixa de
+funcionar. Vale a pena corrê-lo sempre que se mexer no porteiro, na posse dos
+dados ou no que vai para o registo.
 
 Há um terceiro, que **fala com a API a sério** — é a única forma de saber se as
 descrições das ferramentas são claras o suficiente para o modelo escolher bem:
@@ -604,17 +621,30 @@ Como reduzir ainda mais:
 | Lembretes à hora errada | `TIMEZONE` incorreto | `TIMEZONE=Europe/Lisbon` |
 | `ZoneInfoNotFoundError` | Base de fusos em falta | `pip install tzdata` |
 | Bot não responde | Processo parado ou token errado | Ver `assistente.log` |
-| «This is a private assistant…» | Outra pessoa reclamou o bot primeiro | `/who` do lado dela e `/allow <o teu id>`; ou apagar a tabela `access` |
+| O bot não responde a nada | O teu id não está autorizado | Painel → «Utilizadores» → Adicionar; ou põe o id em `ALLOWED_USER_IDS`. O id recusado aparece no registo |
+| «Only the owner can change who has access» | Estás autorizado mas não és o dono | Pede ao dono, ou passa a coroa no painel («Tornar dono») |
 
 ---
 
 ## 9. Privacidade
 
 Tudo é local, exceto o texto das conversas, que é enviado à API DeepSeek para
-gerar as respostas. Define `ALLOWED_USER_IDS` (secção 3.4.1) — sem isso o bot
-aceita mensagens de qualquer pessoa. A base de dados (`assistente.db`) fica na tua máquina e o
-`.gitignore` já a exclui, tal como o `.env`. Se guardares dados sensíveis,
-considera cifrar o disco — e vê a cifra da base de dados na secção 6.
+gerar as respostas.
+
+- **Acesso:** o bot só responde a quem estiver autorizado (secção 3.4.1), e só
+  em conversa privada. Sem lista, não responde a ninguém.
+- **Ficheiros:** a base de dados (`assistente.db`) e o registo são criados
+  legíveis só pelo teu utilizador (0600 em Linux/macOS; em Windows valem as
+  permissões da tua pasta de perfil).
+- **`.gitignore`:** exclui o `.env` *e as suas cópias* (`.env.bak`, que o painel
+  escreve ao passar a gestão da lista para a base de dados), a base de dados e
+  os ficheiros de registo.
+- **Registo:** por omissão **não** guarda o texto das mensagens nem o conteúdo
+  das notas — só ids e nomes de ferramentas. Põe `LOG_MESSAGES=true` para os
+  incluir enquanto diagnosticas alguma coisa, e volta a desligar depois.
+
+Se guardares dados sensíveis, considera cifrar o disco — e vê a cifra da base
+de dados na secção 6.
 
 ---
 

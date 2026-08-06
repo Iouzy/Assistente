@@ -1,10 +1,17 @@
-# Segredos e configuração local
-.env
+# Segredos e configuração local.
+# O padrão apanha também as cópias (.env.bak, escrita pelo painel) — só o
+# exemplo, que não tem segredos nenhuns, é que fica de fora.
+.env*
+!.env.example
 
 # Base de dados
 *.db
 *.db-wal
 *.db-shm
+
+# Registos: contêm o texto das conversas e das notas.
+*.log
+*.log.*
 
 # Python
 __pycache__/
