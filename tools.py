@@ -643,7 +643,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "add_event",
             "description": (
                 "Save a diary appointment (meeting, trip, dinner); also schedules an "
-                "alert 15 min before. Use when the thing happens at a time."
+                "alert 15 min before. Use whenever the thing itself happens at a time, "
+                "even if they say 'remind me' — it belongs in the diary."
             ),
             "parameters": {
                 "type": "object",
@@ -696,8 +697,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "set_reminder",
             "description": (
-                "Schedule a one-off alert with no diary entry, e.g. 'remind me to take "
-                "the pill at 9'. Use when nothing is being booked."
+                "Schedule a one-off alert for a task with no appointment behind it, "
+                "e.g. 'remind me to take the pill at 9'. If something is actually "
+                "happening at that time, use add_event instead."
             ),
             "parameters": {
                 "type": "object",

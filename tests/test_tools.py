@@ -267,6 +267,52 @@ check("mensagens longas são partidas", len(blocos) > 1 and
       all(len(b) <= bot.TELEGRAM_MAX_LENGTH for b in blocos), f"{len(blocos)} blocos")
 check("mensagens curtas não são partidas", bot._split_message("olá") == ["olá"])
 
+# --- controlo de acesso -----------------------------------------------------
+import asyncio  # noqa: E402
+import dataclasses  # noqa: E402
+import types  # noqa: E402
+
+from telegram.ext import ApplicationHandlerStop  # noqa: E402
+
+
+class _BotFalso:
+    def __init__(self):
+        self.enviadas = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.enviadas.append((chat_id, text))
+
+
+def _actualizacao(uid):
+    return types.SimpleNamespace(
+        effective_user=types.SimpleNamespace(id=uid, first_name="X", username="x"),
+        effective_chat=types.SimpleNamespace(id=uid),
+    )
+
+
+def _porteiro_deixa_passar(uid):
+    falso = _BotFalso()
+    try:
+        asyncio.run(bot.guard_access(_actualizacao(uid), types.SimpleNamespace(bot=falso)))
+        return True, falso
+    except ApplicationHandlerStop:
+        return False, falso
+
+
+_original = bot.settings
+bot.settings = dataclasses.replace(_original, allowed_user_ids=frozenset({111, 222}))
+
+passou, _ = _porteiro_deixa_passar(111)
+check("porteiro deixa passar id autorizado", passou)
+passou, falso = _porteiro_deixa_passar(999)
+check("porteiro bloqueia id estranho", not passou)
+check("estranho recebe explicação", falso.enviadas and "private assistant" in falso.enviadas[0][1])
+
+bot.settings = dataclasses.replace(_original, allowed_user_ids=frozenset())
+passou, _ = _porteiro_deixa_passar(999)
+check("sem lista, o bot fica aberto a todos", passou)
+bot.settings = _original
+
 # --- encerramento -----------------------------------------------------------
 scheduler.shutdown(wait=True)
 db.close_db()

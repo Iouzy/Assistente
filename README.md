@@ -70,6 +70,11 @@ Ao contrário de um simples *chatbot*, o assistente:
 Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
 **Cada toque responde direto da base de dados, sem uma única chamada à API.**
 
+### Acesso
+- **Lista de utilizadores autorizados** (`ALLOWED_USER_IDS`): sem ela, um bot de
+  Telegram é público e qualquer pessoa pode gastar o teu saldo da API.
+- Os dados estão sempre isolados por utilizador, mesmo com o bot aberto.
+
 ### Robustez
 - Base de dados protegida por lock, segura entre a thread do bot e a do scheduler.
 - Falhas da API (rede, quota, autenticação) traduzidas em mensagens compreensíveis.
@@ -142,6 +147,33 @@ DEEPSEEK_API_KEY=sk-a-tua-chave-real
 ```
 
 As restantes são opcionais e estão documentadas no `.env.example`.
+
+### 3.4.1. Fechar o bot a estranhos (recomendado)
+
+**Um bot de Telegram é público.** Qualquer pessoa que descubra o username pode
+escrever-lhe. Os dados estão isolados por utilizador — um estranho nunca veria
+a tua agenda, teria um assistente vazio só dele — mas **cada mensagem dele
+gastaria o saldo da tua conta DeepSeek**.
+
+Para o fechar:
+
+1. Arranca o bot e envia-lhe uma mensagem qualquer.
+2. Procura o teu id nos registos:
+   ```
+   INFO | bot | Mensagem de Miguel (123456789): olá
+                                    ^^^^^^^^^ este número
+   ```
+3. Põe no `.env` e reinicia:
+   ```ini
+   ALLOWED_USER_IDS=123456789
+   ```
+
+Vários utilizadores separam-se por vírgulas: `ALLOWED_USER_IDS=123456789,987654321`.
+Quem não estiver na lista recebe uma recusa educada e nada mais acontece — nem
+uma chamada à API.
+
+Sem esta variável definida o bot arranca à mesma, mas avisa nos registos que
+está aberto.
 
 ### 3.5. Executar
 
@@ -478,13 +510,15 @@ Como reduzir ainda mais:
 | Lembretes à hora errada | `TIMEZONE` incorreto | `TIMEZONE=Europe/Lisbon` |
 | `ZoneInfoNotFoundError` | Base de fusos em falta | `pip install tzdata` |
 | Bot não responde | Processo parado ou token errado | Ver `assistente.log` |
+| «This is a private assistant…» | O teu id não está em `ALLOWED_USER_IDS` | Ver a secção 3.4.1 |
 
 ---
 
 ## 9. Privacidade
 
 Tudo é local, exceto o texto das conversas, que é enviado à API DeepSeek para
-gerar as respostas. A base de dados (`assistente.db`) fica na tua máquina e o
+gerar as respostas. Define `ALLOWED_USER_IDS` (secção 3.4.1) — sem isso o bot
+aceita mensagens de qualquer pessoa. A base de dados (`assistente.db`) fica na tua máquina e o
 `.gitignore` já a exclui, tal como o `.env`. Se guardares dados sensíveis,
 considera cifrar o disco — e vê a cifra da base de dados na secção 6.
 
