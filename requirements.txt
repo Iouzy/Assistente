@@ -1,0 +1,17 @@
+# Integração com o Telegram (v20+ — API assíncrona).
+python-telegram-bot>=20.7,<22.0
+
+# Cliente OpenAI, usado para falar com a API DeepSeek (compatível com OpenAI).
+openai>=1.30.0,<2.0.0
+
+# Agendamento de lembretes em segundo plano.
+APScheduler>=3.10.4,<4.0.0
+
+# Leitura do ficheiro .env.
+python-dotenv>=1.0.0,<2.0.0
+
+# Interpretação de datas em linguagem natural ("amanhã às 15h").
+dateparser>=1.2.0,<2.0.0
+
+# Base de dados de fusos horários (necessária em Windows e imagens Linux mínimas).
+tzdata>=2024.1

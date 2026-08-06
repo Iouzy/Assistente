@@ -1,0 +1,125 @@
+"""Carregamento e validação da configuração da aplicação.
+
+Todas as definições vêm de variáveis de ambiente, tipicamente carregadas de um
+ficheiro `.env` na raiz do projeto (ver `.env.example`).
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from dotenv import load_dotenv
+
+# Carrega o .env para o ambiente do processo. `override=False` garante que
+# variáveis já definidas no sistema (ex.: em produção) têm prioridade.
+load_dotenv(override=False)
+
+
+class ConfigError(RuntimeError):
+    """Levantada quando a configuração é inválida ou está incompleta."""
+
+
+def _get_str(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+def _get_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"A variável {name} tem de ser um número inteiro (valor: {raw!r}).") from exc
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Configuração imutável da aplicação."""
+
+    # --- Credenciais obrigatórias ---
+    telegram_token: str
+    deepseek_api_key: str
+
+    # --- DeepSeek (API compatível com OpenAI) ---
+    deepseek_base_url: str
+    deepseek_model: str
+
+    # --- Armazenamento ---
+    database_path: str
+
+    # --- Comportamento ---
+    timezone: str
+    max_history_messages: int
+    history_keep_messages: int
+    event_reminder_lead_minutes: int
+    late_reminder_grace_minutes: int
+    max_tool_iterations: int
+    log_level: str
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        return cls(
+            telegram_token=_get_str("TELEGRAM_TOKEN"),
+            deepseek_api_key=_get_str("DEEPSEEK_API_KEY"),
+            deepseek_base_url=_get_str("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            deepseek_model=_get_str("DEEPSEEK_MODEL", "deepseek-chat"),
+            database_path=_get_str("DATABASE_PATH", "assistente.db"),
+            timezone=_get_str("TIMEZONE", "Europe/Lisbon"),
+            # Nº máximo de mensagens mantidas em memória antes de resumir.
+            max_history_messages=_get_int("MAX_HISTORY_MESSAGES", 20),
+            # Quantas mensagens recentes ficam depois de um resumo.
+            history_keep_messages=_get_int("HISTORY_KEEP_MESSAGES", 8),
+            # Minutos de antecedência do lembrete automático de um evento.
+            event_reminder_lead_minutes=_get_int("EVENT_REMINDER_LEAD_MINUTES", 15),
+            # Lembretes que expiraram enquanto o bot esteve offline ainda são
+            # enviados (com aviso de atraso) dentro desta janela.
+            late_reminder_grace_minutes=_get_int("LATE_REMINDER_GRACE_MINUTES", 120),
+            # Rondas de tool calling permitidas por mensagem (trava ciclos).
+            max_tool_iterations=_get_int("MAX_TOOL_ITERATIONS", 5),
+            log_level=_get_str("LOG_LEVEL", "INFO").upper(),
+        )
+
+    @property
+    def tzinfo(self) -> ZoneInfo:
+        """Fuso horário usado para interpretar e apresentar datas."""
+        return ZoneInfo(self.timezone)
+
+    def validate(self) -> None:
+        """Valida a configuração, levantando `ConfigError` se algo faltar."""
+        missing = [
+            name
+            for name, value in (
+                ("TELEGRAM_TOKEN", self.telegram_token),
+                ("DEEPSEEK_API_KEY", self.deepseek_api_key),
+            )
+            if not value
+        ]
+        if missing:
+            raise ConfigError(
+                "Faltam variáveis de ambiente obrigatórias: "
+                + ", ".join(missing)
+                + ". Copie o ficheiro .env.example para .env e preencha-o."
+            )
+
+        try:
+            _ = self.tzinfo
+        except ZoneInfoNotFoundError as exc:
+            raise ConfigError(
+                f"O fuso horário {self.timezone!r} não existe. "
+                "Use um identificador IANA (ex.: Europe/Lisbon). "
+                "Em Windows poderá ser necessário instalar o pacote `tzdata`."
+            ) from exc
+
+        if self.history_keep_messages >= self.max_history_messages:
+            raise ConfigError(
+                "HISTORY_KEEP_MESSAGES tem de ser menor do que MAX_HISTORY_MESSAGES."
+            )
+        if self.max_tool_iterations < 1:
+            raise ConfigError("MAX_TOOL_ITERATIONS tem de ser pelo menos 1.")
+
+
+# Instância única partilhada por toda a aplicação.
+settings = Settings.from_env()
