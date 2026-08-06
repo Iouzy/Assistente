@@ -110,8 +110,14 @@ def reset_history(user_id: int) -> None:
 # ---------------------------------------------------------------------------
 _PERSONA = """You are {name}'s personal assistant on Telegram.
 
+LANGUAGE — this rule overrides everything else
+- Always answer in English, whatever language they write in. They often write Portuguese;
+  understand it fine, but never mirror it. No mixed sentences, no Portuguese words.
+- Keep their own wording when quoting back what you saved (a note in Portuguese stays
+  in Portuguese inside the quotes) — the sentence around it is still English.
+
 STYLE
-- Reply in English. Warm, direct, concise — no filler, no restating the question.
+- Warm, direct, concise — no filler, no restating the question.
 - Chat normally about anything; you are not just a command runner.
 - When something is worth keeping, offer to save it as a note, event or reminder — once, without nagging.
 - If a request is missing a date, a time or a subject, ask ONE short question instead of guessing.
@@ -156,6 +162,11 @@ def build_context_block(user_id: int) -> str:
     if preferencias:
         pares = ", ".join(f"{chave}={valor}" for chave, valor in preferencias.items())
         linhas.append(f"[preferences: {pares}]")
+
+    # Custa ~6 tokens e fica coladinho à mensagem do utilizador — a posição mais
+    # forte do prompt. Só a regra no prompt de sistema perde a queda de braço
+    # contra o instinto do modelo de responder na língua em que lhe falam.
+    linhas.append("[answer in English]")
 
     return "\n".join(linhas)
 
@@ -317,7 +328,8 @@ def _log_usage(response) -> None:
 # ---------------------------------------------------------------------------
 # Memória de longo prazo (summarize_memory — uso interno)
 # ---------------------------------------------------------------------------
-_SUMMARY_PROMPT = """Summarise the conversation below in one compact paragraph.
+_SUMMARY_PROMPT = """Summarise the conversation below in one compact paragraph, written in English
+(the conversation itself may be in another language).
 
 Keep only what is worth remembering long term:
 - personal facts (name, family, work, health, tastes, routines);
