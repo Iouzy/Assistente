@@ -58,7 +58,7 @@ class FakeCompletions:
 
     def create(self, **kwargs):
         sistema = kwargs["messages"][0]["content"]
-        if sistema.startswith("Resume a conversa"):
+        if sistema.startswith("Summarise the conversation"):
             self.resumos_pedidos += 1
             return resposta(content=self.resumo)
         self.pedidos.append(kwargs)
@@ -90,10 +90,37 @@ check("uma só chamada à API", len(cliente.chat.completions.pedidos) == 1)
 
 pedido = cliente.chat.completions.pedidos[0]
 check("tools enviadas no formato OpenAI",
-      len(pedido["tools"]) == 7 and pedido["tools"][0]["type"] == "function")
+      len(pedido["tools"]) == 10 and pedido["tools"][0]["type"] == "function")
 check("tool_choice=auto", pedido["tool_choice"] == "auto")
 check("prompt de sistema presente", pedido["messages"][0]["role"] == "system")
 check("modelo correcto", pedido["model"] == "deepseek-chat")
+
+# --------------------------------------------------------------------------
+# 1b. Estrutura do prompt para a cache de prefixo da DeepSeek
+#
+# A cache só desconta se o INÍCIO do pedido for idêntico entre chamadas. Tudo
+# o que varia (data, agenda, memória) tem de viver na ÚLTIMA mensagem.
+# --------------------------------------------------------------------------
+sistema = pedido["messages"][0]["content"]
+ultima = pedido["messages"][-1]["content"]
+
+check("prompt de sistema sem data/hora", "2026" not in sistema)
+check("bloco de contexto vai na última mensagem", ultima.startswith("[context: now"))
+check("mensagem do utilizador vem depois do contexto", ultima.endswith("olá"))
+
+# O histórico guardado não pode levar o bloco de contexto: se levasse, o
+# prefixo mudava a cada turno e a cache nunca acertava.
+guardado = llm.get_history(7)
+check("histórico guarda a mensagem crua, sem contexto",
+      guardado[0]["content"] == "olá", repr(guardado[0]["content"]))
+
+cliente = instalar([resposta(content="segunda resposta")])
+llm.generate_reply(ctx, "outra")
+msgs2 = cliente.chat.completions.pedidos[0]["messages"]
+check("prompt de sistema idêntico no turno seguinte", msgs2[0]["content"] == sistema)
+check("histórico anterior reenviado sem alterações",
+      msgs2[1]["content"] == "olá" and msgs2[2]["content"] == "Olá, Ana! Como estás?")
+llm.reset_history(7)
 
 # --------------------------------------------------------------------------
 # 2. Ciclo com ferramenta: add_event -> resultado -> resposta final
@@ -114,7 +141,7 @@ check("resultado devolvido com role=tool",
       segundas_msgs[-1]["role"] == "tool" and
       segundas_msgs[-1]["tool_call_id"] == "call_1")
 check("resultado da ferramenta em JSON",
-      '"estado": "ok"' in segundas_msgs[-1]["content"])
+      '"status": "ok"' in segundas_msgs[-1]["content"])
 check("evento realmente gravado", len(db.get_upcoming_events(7, __import__("datetime")
       .datetime.now(__import__("config").settings.tzinfo))) == 1)
 
@@ -170,7 +197,7 @@ try:
     llm.generate_reply(ctx, "olá")
     check("erro da API tratado", False, "não levantou")
 except llm.AssistantError as exc:
-    check("erro da API vira AssistantError", "erro" in str(exc).lower(), str(exc))
+    check("erro da API vira AssistantError", "went wrong" in str(exc).lower(), str(exc))
 except Exception as exc:
     check("erro da API vira AssistantError", False, f"{type(exc).__name__}: {exc}")
 
@@ -189,7 +216,40 @@ check("summarize_memory foi chamado",
       f"{cliente.chat.completions.resumos_pedidos} resumo(s)")
 resumo = db.get_latest_summary(7)
 check("resumo gravado na base de dados", resumo is not None and "Porto" in resumo, resumo or "")
-check("resumo entra no prompt de sistema", "Porto" in llm.build_system_prompt(ctx))
+check("resumo entra no bloco de contexto", "Porto" in llm.build_context_block(7))
+
+# --------------------------------------------------------------------------
+# 7b. Arrumação da memória: conversas curtas não se podem perder
+# --------------------------------------------------------------------------
+llm.reset_history(7)
+cliente = instalar([resposta(content="olá!")], )
+cliente.chat.completions.resumo = "The user mentioned a trip to Madrid."
+llm.generate_reply(ctx, "vou a Madrid em Setembro")
+
+# Duas mensagens apenas — muito abaixo do limite de resumo (4).
+check("conversa curta fica só em RAM", len(llm.get_history(7)) == 2)
+antes = db.get_latest_summary(7)
+
+guardadas = llm.flush_all()
+check("flush_all resume a conversa curta", guardadas == 1)
+check("resumo novo gravado", db.get_latest_summary(7) != antes and
+      "Madrid" in db.get_latest_summary(7), db.get_latest_summary(7))
+check("RAM esvaziada depois de arrumar", llm.get_history(7) == [])
+check("flush_all sem nada em memória não faz nada", llm.flush_all() == 0)
+
+# flush_idle só arruma o que está parado há mais tempo do que o limite.
+from datetime import datetime, timedelta  # noqa: E402
+from config import settings as _s  # noqa: E402
+
+cliente = instalar([resposta(content="ok")])
+cliente.chat.completions.resumo = "The user asked about the car."
+llm.generate_reply(ctx, "o carro precisa de revisão")
+check("conversa recente não é arrumada por flush_idle", llm.flush_idle() == 0)
+
+llm._last_activity[7] = datetime.now(_s.tzinfo) - timedelta(minutes=_s.idle_flush_minutes + 5)
+check("conversa parada é arrumada por flush_idle", llm.flush_idle() == 1)
+check("memória de longo prazo actualizada", "car" in (db.get_latest_summary(7) or "").lower())
+check("RAM esvaziada por flush_idle", llm.get_history(7) == [])
 
 # --------------------------------------------------------------------------
 # 8. Ponte scheduler (thread) -> event loop do Telegram
@@ -198,7 +258,7 @@ enviadas = []
 
 
 class FakeBot:
-    async def send_message(self, chat_id, text, parse_mode=None):
+    async def send_message(self, chat_id, text, parse_mode=None, reply_markup=None):
         await asyncio.sleep(0)
         enviadas.append((chat_id, text))
 

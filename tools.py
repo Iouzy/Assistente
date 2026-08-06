@@ -4,6 +4,12 @@ Cada ferramenta é uma função Python normal que devolve um dicionário
 serializável em JSON. O esquema em `TOOL_SCHEMAS` segue exactamente o formato
 de *tools* da OpenAI, que a API DeepSeek reproduz.
 
+Nota sobre a língua: tudo o que viaja para o modelo — descrições das
+ferramentas e chaves dos resultados — está em inglês, por duas razões. Gasta
+menos tokens do que o português (que usa acentos e palavras mais longas) e o
+catálogo de ferramentas é reenviado em *todas* as chamadas. Os comentários e a
+documentação ficam em português, porque esses só nós é que os lemos.
+
 O contexto do utilizador (quem fala e em que chat) não vem do modelo — seria
 inseguro — mas de um `ToolContext` construído pelo handler do Telegram.
 """
@@ -38,24 +44,17 @@ class ToolContext:
 
 
 # ---------------------------------------------------------------------------
-# Datas em português
+# Datas
 # ---------------------------------------------------------------------------
-_WEEKDAYS_PT = [
-    "segunda-feira",
-    "terça-feira",
-    "quarta-feira",
-    "quinta-feira",
-    "sexta-feira",
-    "sábado",
-    "domingo",
+_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+_MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
 ]
 
-_MONTHS_PT = [
-    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
-    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
-]
-
-# Expressões frequentes que o dateparser não interpreta bem em pt-PT.
+# Expressões que o dateparser não interpreta bem. Mantemos as portuguesas
+# porque continuam a funcionar mesmo com o bot a responder em inglês.
 _NORMALISATIONS: list[tuple[str, str]] = [
     (r"\bmeio-?\s*dia\b", "12:00"),
     (r"\bmeia-?\s*noite\b", "00:00"),
@@ -72,41 +71,61 @@ _NORMALISATIONS: list[tuple[str, str]] = [
     (r"\b(\d{1,2})\s*horas?\b", r"\1:00"),        # 15 horas -> 15:00
 ]
 
-
-# Expressões relativas ("daqui a 20 minutos") são calculadas directamente: o
-# dateparser não as cobre bem em pt-PT e a normalização acima transformaria
-# "2 horas" em "2:00", alterando o sentido da frase.
+# Expressões relativas ("in 20 minutes", "daqui a 20 minutos") são calculadas
+# directamente: o dateparser não as cobre bem em português e a normalização
+# acima transformaria "2 horas" em "2:00", alterando o sentido da frase.
 _NUMBER_WORDS: dict[str, float] = {
+    # Português
     "um": 1, "uma": 1, "dois": 2, "duas": 2, "três": 3, "tres": 3,
     "quatro": 4, "cinco": 5, "seis": 6, "sete": 7, "oito": 8, "nove": 9,
     "dez": 10, "onze": 11, "doze": 12, "quinze": 15, "vinte": 20,
     "trinta": 30, "meia": 0.5, "meio": 0.5,
+    # Inglês
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "half": 0.5,
 }
 
-# Unidades ordenadas da mais longa para a mais curta (a alternância do `re`
-# devolve a primeira que encaixar).
-_UNIT_SECONDS: list[tuple[str, float]] = [
-    ("segundos", 1), ("segundo", 1), ("seg", 1),
-    ("minutos", 60), ("minuto", 60), ("mins", 60), ("min", 60),
-    ("semanas", 604800), ("semana", 604800),
-    ("horas", 3600), ("hora", 3600),
-    ("meses", 2592000), ("mês", 2592000), ("mes", 2592000),
-    ("dias", 86400), ("dia", 86400),
-    ("anos", 31536000), ("ano", 31536000),
-    ("h", 3600), ("m", 60), ("s", 1),
-]
+_UNIT_SECONDS: dict[str, float] = {
+    # Português
+    "segundos": 1, "segundo": 1, "seg": 1,
+    "minutos": 60, "minuto": 60,
+    "horas": 3600, "hora": 3600,
+    "dias": 86400, "dia": 86400,
+    "semanas": 604800, "semana": 604800,
+    "meses": 2592000, "mês": 2592000, "mes": 2592000,
+    "anos": 31536000, "ano": 31536000,
+    # Inglês
+    "seconds": 1, "second": 1, "secs": 1, "sec": 1,
+    "minutes": 60, "minute": 60, "mins": 60, "min": 60,
+    "hours": 3600, "hour": 3600, "hrs": 3600, "hr": 3600,
+    "days": 86400, "day": 86400,
+    "weeks": 604800, "week": 604800,
+    "months": 2592000, "month": 2592000,
+    "years": 31536000, "year": 31536000,
+    # Abreviaturas de uma letra (por último, para não roubarem os prefixos)
+    "h": 3600, "m": 60, "s": 1,
+}
+
+
+def _alternation(palavras) -> str:
+    """Alternância de regex com as palavras mais longas primeiro.
+
+    O `re` devolve a primeira alternativa que encaixar, por isso "minutes" tem
+    de ser testado antes de "min" e de "m".
+    """
+    return "|".join(re.escape(p) for p in sorted(palavras, key=len, reverse=True))
+
 
 _RELATIVE_RE = re.compile(
-    r"\b(?:daqui\s+a|d'?aqui\s+a|dentro\s+de|passad[oa]s?|em)\s+"
-    r"(?P<quantia>\d+(?:[.,]\d+)?|"
-    + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True))
-    + r")\s*"
-    r"(?P<unidade>" + "|".join(unit for unit, _ in _UNIT_SECONDS) + r")\b"
+    r"\b(?:daqui\s+a|d'?aqui\s+a|dentro\s+de|passad[oa]s?|em|in|within|after)\s+"
+    r"(?P<quantia>\d+(?:[.,]\d+)?|" + _alternation(_NUMBER_WORDS) + r")\s*"
+    r"(?P<unidade>" + _alternation(_UNIT_SECONDS) + r")\b"
 )
 
 
 def _parse_relative(text: str, now: datetime) -> Optional[datetime]:
-    """Interpreta expressões do tipo «daqui a 20 minutos» / «dentro de 2 horas»."""
+    """Interpreta «in 20 minutes» / «daqui a 2 horas» / «dentro de 3 dias»."""
     match = _RELATIVE_RE.search(text.lower())
     if not match:
         return None
@@ -119,18 +138,17 @@ def _parse_relative(text: str, now: datetime) -> Optional[datetime]:
     if quantia <= 0:
         return None
 
-    unidade = match.group("unidade")
-    segundos = next(valor for nome, valor in _UNIT_SECONDS if nome == unidade)
-    return now + timedelta(seconds=quantia * segundos)
+    return now + timedelta(seconds=quantia * _UNIT_SECONDS[match.group("unidade")])
 
 
 def _normalise_date_text(text: str) -> str:
-    """Limpa e uniformiza expressões temporais em português antes da análise."""
+    """Limpa e uniformiza expressões temporais antes da análise."""
     cleaned = text.strip().lower()
     for pattern, replacement in _NORMALISATIONS:
         cleaned = re.sub(pattern, replacement, cleaned)
-    # "às"/"as" antes da hora só confunde o parser.
-    cleaned = re.sub(r"\b[àa]s?\b", " ", cleaned)
+    # "às"/"as" antes de uma hora só confunde o parser. A verificação de que
+    # se segue um número evita mutilar frases em inglês ("as soon as").
+    cleaned = re.sub(r"\b[àa]s\b(?=\s*\d)", " ", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
@@ -159,11 +177,10 @@ def parse_datetime(text: str, prefer_future: bool = True) -> Optional[datetime]:
         "RELATIVE_BASE": now.replace(tzinfo=None),
     }
 
-    # Tenta primeiro o texto normalizado; se falhar, o original.
     for candidate in (_normalise_date_text(text), text.strip()):
         if not candidate:
             continue
-        parsed = dateparser.parse(candidate, languages=["pt", "en"], settings=parser_settings)
+        parsed = dateparser.parse(candidate, languages=["en", "pt"], settings=parser_settings)
         if parsed is not None:
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=settings.tzinfo)
@@ -172,13 +189,13 @@ def parse_datetime(text: str, prefer_future: bool = True) -> Optional[datetime]:
 
 
 def format_datetime(value: datetime | str) -> str:
-    """Formata uma data/hora para leitura humana em pt-PT."""
+    """Formata uma data/hora para leitura humana: `Friday, 7 August 2026 at 15:00`."""
     dt = _coerce_datetime(value)
     if dt is None:
         return str(value)
     return (
-        f"{_WEEKDAYS_PT[dt.weekday()]}, {dt.day} de {_MONTHS_PT[dt.month - 1]} "
-        f"de {dt.year} às {dt:%H:%M}"
+        f"{_WEEKDAYS[dt.weekday()]}, {dt.day} {_MONTHS[dt.month - 1]} {dt.year} "
+        f"at {dt:%H:%M}"
     )
 
 
@@ -186,6 +203,12 @@ def format_short(value: datetime | str) -> str:
     """Formato compacto: `07/08/2026 15:00`."""
     dt = _coerce_datetime(value)
     return dt.strftime("%d/%m/%Y %H:%M") if dt else str(value)
+
+
+def format_time(value: datetime | str) -> str:
+    """Só as horas: `15:00`."""
+    dt = _coerce_datetime(value)
+    return dt.strftime("%H:%M") if dt else str(value)
 
 
 def to_datetime(value: datetime | str) -> Optional[datetime]:
@@ -213,17 +236,16 @@ def _serialise_event(event: dict[str, Any]) -> dict[str, Any]:
     """Reduz um evento aos campos úteis para o modelo."""
     return {
         "id": event["id"],
-        "descricao": event["description"],
-        "data_iso": event["event_time"],
-        "data_legivel": format_datetime(event["event_time"]),
+        "description": event["description"],
+        "when": format_datetime(event["event_time"]),
     }
 
 
 def _serialise_note(note: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": note["id"],
-        "conteudo": note["content"],
-        "criada_em": format_short(note["created_at"]),
+        "content": note["content"],
+        "saved": format_short(note["created_at"]),
     }
 
 
@@ -233,13 +255,7 @@ def _serialise_note(note: dict[str, Any]) -> dict[str, Any]:
 def get_current_datetime(ctx: ToolContext) -> dict[str, Any]:
     """Devolve a data e a hora actuais no fuso configurado."""
     now = datetime.now(settings.tzinfo)
-    return {
-        "estado": "ok",
-        "data_hora_iso": now.isoformat(),
-        "data_hora_legivel": format_datetime(now),
-        "dia_da_semana": _WEEKDAYS_PT[now.weekday()],
-        "fuso_horario": settings.timezone,
-    }
+    return {"status": "ok", "now": format_datetime(now), "timezone": settings.timezone}
 
 
 # ---------------------------------------------------------------------------
@@ -249,27 +265,20 @@ def add_event(ctx: ToolContext, date: str, description: str) -> dict[str, Any]:
     """Guarda um compromisso e agenda o lembrete prévio."""
     description = (description or "").strip()
     if not description:
-        return {
-            "estado": "erro",
-            "erro": "Falta a descrição do evento. Pergunte ao utilizador o que é o compromisso.",
-        }
+        return {"status": "error", "error": "Missing description. Ask the user what the appointment is."}
 
     event_time = parse_datetime(date)
     if event_time is None:
         return {
-            "estado": "erro",
-            "erro": (
-                f"Não consegui interpretar a data {date!r}. "
-                "Peça ao utilizador uma data mais explícita (ex.: 'amanhã às 15:00' "
-                "ou '12/09/2026 09:30')."
-            ),
+            "status": "error",
+            "error": f"Could not understand the date {date!r}. Ask for a clearer one.",
         }
 
     now = datetime.now(settings.tzinfo)
     event_id = db.create_event(ctx.user_id, ctx.chat_id, description, event_time)
 
     # Lembrete automático, por omissão 15 minutos antes.
-    reminder_info: dict[str, Any] = {"criado": False}
+    reminder_info: dict[str, Any] = {"created": False}
     if event_time > now:
         lead = timedelta(minutes=settings.event_reminder_lead_minutes)
         remind_at = event_time - lead
@@ -283,7 +292,7 @@ def add_event(ctx: ToolContext, date: str, description: str) -> dict[str, Any]:
 
         message = f"{description}\n\n🗓️ {format_datetime(event_time)}"
         if antecedencia_normal:
-            message += f"\n(faltam {settings.event_reminder_lead_minutes} minutos)"
+            message += f"\n(in {settings.event_reminder_lead_minutes} minutes)"
 
         reminder_id = db.create_reminder(
             user_id=ctx.user_id,
@@ -294,24 +303,18 @@ def add_event(ctx: ToolContext, date: str, description: str) -> dict[str, Any]:
             event_id=event_id,
         )
         scheduler.schedule_reminder(reminder_id, remind_at)
-        reminder_info = {
-            "criado": True,
-            "id": reminder_id,
-            "hora_iso": remind_at.isoformat(),
-            "hora_legivel": format_datetime(remind_at),
-        }
+        reminder_info = {"created": True, "at": format_datetime(remind_at)}
 
     logger.info("Evento #%s criado para o utilizador %s.", event_id, ctx.user_id)
     return {
-        "estado": "ok",
-        "evento": {
+        "status": "ok",
+        "event": {
             "id": event_id,
-            "descricao": description,
-            "data_iso": event_time.isoformat(),
-            "data_legivel": format_datetime(event_time),
+            "description": description,
+            "when": format_datetime(event_time),
         },
-        "lembrete": reminder_info,
-        "no_passado": event_time <= now,
+        "reminder": reminder_info,
+        "in_the_past": event_time <= now,
     }
 
 
@@ -330,13 +333,13 @@ def search_events(ctx: ToolContext, query: str = "") -> dict[str, Any]:
     if not query:
         events = db.get_upcoming_events(ctx.user_id, datetime.now(settings.tzinfo))
         return {
-            "estado": "ok",
-            "tipo_de_pesquisa": "proximos",
-            "total": len(events),
-            "eventos": [_serialise_event(event) for event in events],
+            "status": "ok",
+            "matched_by": "upcoming",
+            "count": len(events),
+            "events": [_serialise_event(event) for event in events],
         }
 
-    # 1) Tentativa por data. `prefer_future=False` evita que "hoje" salte para
+    # 1) Tentativa por data. `prefer_future=False` evita que "today" salte para
     #    amanhã e permite consultar dias passados.
     day = parse_datetime(query, prefer_future=False)
     if day is not None:
@@ -344,30 +347,35 @@ def search_events(ctx: ToolContext, query: str = "") -> dict[str, Any]:
         events = db.get_events_between(ctx.user_id, start, end)
         if events or _looks_like_date(query):
             return {
-                "estado": "ok",
-                "tipo_de_pesquisa": "data",
-                "dia": format_short(start).split(" ")[0],
-                "total": len(events),
-                "eventos": [_serialise_event(event) for event in events],
+                "status": "ok",
+                "matched_by": "date",
+                "day": format_short(start).split(" ")[0],
+                "count": len(events),
+                "events": [_serialise_event(event) for event in events],
             }
 
     # 2) Pesquisa textual.
     events = db.search_events_by_text(ctx.user_id, query)
     return {
-        "estado": "ok",
-        "tipo_de_pesquisa": "texto",
-        "termo": query,
-        "total": len(events),
-        "eventos": [_serialise_event(event) for event in events],
+        "status": "ok",
+        "matched_by": "text",
+        "count": len(events),
+        "events": [_serialise_event(event) for event in events],
     }
 
 
 _DATE_HINTS = (
-    "hoje", "amanhã", "amanha", "ontem", "depois de amanhã", "próxima", "proxima",
-    "segunda", "terça", "terca", "quarta", "quinta", "sexta", "sábado", "sabado",
-    "domingo", "semana", "mês", "mes", "janeiro", "fevereiro", "março", "marco",
-    "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
-    "novembro", "dezembro",
+    # Português
+    "hoje", "amanhã", "amanha", "ontem", "próxima", "proxima", "segunda",
+    "terça", "terca", "quarta", "quinta", "sexta", "sábado", "sabado",
+    "domingo", "semana", "mês", "mes", "janeiro", "fevereiro", "março",
+    "marco", "abril", "maio", "junho", "julho", "agosto", "setembro",
+    "outubro", "novembro", "dezembro",
+    # Inglês
+    "today", "tomorrow", "yesterday", "next", "this", "monday", "tuesday",
+    "wednesday", "thursday", "friday", "saturday", "sunday", "week", "month",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
 )
 
 
@@ -386,11 +394,11 @@ def save_note(ctx: ToolContext, content: str) -> dict[str, Any]:
     """Guarda uma nota com data/hora."""
     content = (content or "").strip()
     if not content:
-        return {"estado": "erro", "erro": "A nota está vazia. Pergunte o que deve ser guardado."}
+        return {"status": "error", "error": "Empty note. Ask what should be saved."}
 
     note = db.create_note(ctx.user_id, content)
     logger.info("Nota #%s criada para o utilizador %s.", note["id"], ctx.user_id)
-    return {"estado": "ok", "nota": _serialise_note(note)}
+    return {"status": "ok", "note": _serialise_note(note)}
 
 
 # ---------------------------------------------------------------------------
@@ -401,10 +409,9 @@ def search_notes(ctx: ToolContext, query: str = "") -> dict[str, Any]:
     query = (query or "").strip()
     notes = db.list_notes(ctx.user_id) if not query else db.search_notes_by_text(ctx.user_id, query)
     return {
-        "estado": "ok",
-        "termo": query or "(mais recentes)",
-        "total": len(notes),
-        "notas": [_serialise_note(note) for note in notes],
+        "status": "ok",
+        "count": len(notes),
+        "notes": [_serialise_note(note) for note in notes],
     }
 
 
@@ -415,16 +422,13 @@ def set_reminder(ctx: ToolContext, message: str, time: str) -> dict[str, Any]:
     """Agenda um lembrete pontual para uma hora indicada."""
     message = (message or "").strip()
     if not message:
-        return {"estado": "erro", "erro": "Falta o texto do lembrete."}
+        return {"status": "error", "error": "Missing reminder text."}
 
     remind_at = parse_datetime(time)
     if remind_at is None:
         return {
-            "estado": "erro",
-            "erro": (
-                f"Não consegui interpretar a hora {time!r}. "
-                "Peça algo como 'às 9:00', 'daqui a 20 minutos' ou 'amanhã às 8:30'."
-            ),
+            "status": "error",
+            "error": f"Could not understand the time {time!r}. Ask for a clearer one.",
         }
 
     now = datetime.now(settings.tzinfo)
@@ -434,11 +438,8 @@ def set_reminder(ctx: ToolContext, message: str, time: str) -> dict[str, Any]:
             remind_at += timedelta(days=1)
         else:
             return {
-                "estado": "erro",
-                "erro": (
-                    f"A hora indicada ({format_datetime(remind_at)}) está no passado. "
-                    "Peça uma hora futura."
-                ),
+                "status": "error",
+                "error": f"{format_datetime(remind_at)} is in the past. Ask for a future time.",
             }
 
     reminder_id = db.create_reminder(
@@ -452,31 +453,25 @@ def set_reminder(ctx: ToolContext, message: str, time: str) -> dict[str, Any]:
     logger.info("Lembrete #%s criado para o utilizador %s.", reminder_id, ctx.user_id)
 
     return {
-        "estado": "ok",
-        "lembrete": {
-            "id": reminder_id,
-            "mensagem": message,
-            "hora_iso": remind_at.isoformat(),
-            "hora_legivel": format_datetime(remind_at),
-        },
+        "status": "ok",
+        "reminder": {"id": reminder_id, "message": message, "at": format_datetime(remind_at)},
     }
 
 
 # ---------------------------------------------------------------------------
-# Ferramenta 7 — lembretes pendentes (apoio à consulta "o que tenho agendado?")
+# Ferramenta 7 — lembretes pendentes
 # ---------------------------------------------------------------------------
 def list_reminders(ctx: ToolContext) -> dict[str, Any]:
     """Lista os lembretes que ainda não dispararam."""
     reminders = db.get_user_reminders(ctx.user_id)
     return {
-        "estado": "ok",
-        "total": len(reminders),
-        "lembretes": [
+        "status": "ok",
+        "count": len(reminders),
+        "reminders": [
             {
                 "id": reminder["id"],
-                "mensagem": reminder["message"],
-                "hora_legivel": format_datetime(reminder["remind_at"]),
-                "tipo": "compromisso" if reminder["kind"] == "event" else "simples",
+                "message": reminder["message"].splitlines()[0],
+                "at": format_datetime(reminder["remind_at"]),
             }
             for reminder in reminders
         ],
@@ -484,7 +479,133 @@ def list_reminders(ctx: ToolContext) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Contexto de memória (usado na construção do prompt de sistema)
+# Ferramenta 8 — apagar
+#
+# Um único `delete_item` para as três entidades, em vez de três ferramentas
+# separadas: poupa cerca de 120 tokens em cada chamada à API e ao modelo é
+# indiferente.
+# ---------------------------------------------------------------------------
+def _cancel_event_reminders(event_id: int) -> None:
+    """Cancela os jobs dos lembretes de um evento antes de este desaparecer."""
+    for reminder in db.get_reminders_for_event(event_id):
+        scheduler.cancel_reminder(reminder["id"])
+
+
+def delete_item(ctx: ToolContext, kind: str, id: int) -> dict[str, Any]:  # noqa: A002
+    """Apaga um evento, uma nota ou um lembrete pelo respectivo id."""
+    kind = (kind or "").strip().lower()
+    try:
+        item_id = int(id)
+    except (TypeError, ValueError):
+        return {"status": "error", "error": f"Invalid id {id!r}."}
+
+    if kind == "event":
+        # A base de dados apaga os lembretes em cascata, mas os jobs já
+        # agendados têm de ser retirados do scheduler à mão.
+        _cancel_event_reminders(item_id)
+        apagado = db.delete_event(ctx.user_id, item_id)
+    elif kind == "note":
+        apagado = db.delete_note(ctx.user_id, item_id)
+    elif kind == "reminder":
+        scheduler.cancel_reminder(item_id)
+        apagado = db.delete_reminder(ctx.user_id, item_id)
+    else:
+        return {"status": "error", "error": "kind must be event, note or reminder."}
+
+    if not apagado:
+        return {"status": "error", "error": f"No {kind} with id {item_id}. Search for it first."}
+
+    logger.info("%s #%s apagado pelo utilizador %s.", kind, item_id, ctx.user_id)
+    return {"status": "ok", "deleted": {"kind": kind, "id": item_id}}
+
+
+# ---------------------------------------------------------------------------
+# Ferramenta 9 — remarcar / corrigir um evento
+# ---------------------------------------------------------------------------
+def update_event(
+    ctx: ToolContext, id: int, date: str = "", description: str = ""  # noqa: A002
+) -> dict[str, Any]:
+    """Muda a hora e/ou a descrição de um evento, reagendando o aviso."""
+    try:
+        event_id = int(id)
+    except (TypeError, ValueError):
+        return {"status": "error", "error": f"Invalid id {id!r}."}
+
+    evento = db.get_event(event_id)
+    if evento is None or evento["user_id"] != ctx.user_id:
+        return {"status": "error", "error": f"No event with id {event_id}. Search for it first."}
+
+    nova_hora = None
+    if date and date.strip():
+        nova_hora = parse_datetime(date)
+        if nova_hora is None:
+            return {"status": "error", "error": f"Could not understand the date {date!r}."}
+
+    nova_descricao = description.strip() or None
+    if nova_hora is None and nova_descricao is None:
+        return {"status": "error", "error": "Nothing to change: give a new date, a new description, or both."}
+
+    db.update_event(ctx.user_id, event_id, nova_descricao, nova_hora)
+
+    hora_final = nova_hora or to_datetime(evento["event_time"])
+    descricao_final = nova_descricao or evento["description"]
+
+    # O aviso antigo deixou de fazer sentido: cancelamos e criamos outro.
+    for reminder in db.get_reminders_for_event(event_id):
+        scheduler.cancel_reminder(reminder["id"])
+        db.delete_reminder(ctx.user_id, reminder["id"])
+
+    reminder_info: dict[str, Any] = {"created": False}
+    now = datetime.now(settings.tzinfo)
+    if hora_final > now:
+        remind_at = hora_final - timedelta(minutes=settings.event_reminder_lead_minutes)
+        if remind_at <= now:
+            candidate = now + timedelta(seconds=60)
+            remind_at = candidate if candidate < hora_final else hora_final
+        reminder_id = db.create_reminder(
+            user_id=ctx.user_id,
+            chat_id=ctx.chat_id,
+            message=f"{descricao_final}\n\n🗓️ {format_datetime(hora_final)}",
+            remind_at=remind_at,
+            kind="event",
+            event_id=event_id,
+        )
+        scheduler.schedule_reminder(reminder_id, remind_at)
+        reminder_info = {"created": True, "at": format_datetime(remind_at)}
+
+    logger.info("Evento #%s actualizado pelo utilizador %s.", event_id, ctx.user_id)
+    return {
+        "status": "ok",
+        "event": {
+            "id": event_id,
+            "description": descricao_final,
+            "when": format_datetime(hora_final),
+        },
+        "reminder": reminder_info,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ferramenta 10 — preferências duradouras
+# ---------------------------------------------------------------------------
+def set_preference(ctx: ToolContext, key: str, value: str = "") -> dict[str, Any]:
+    """Guarda (ou remove, com valor vazio) uma preferência do utilizador."""
+    key = (key or "").strip()
+    if not key:
+        return {"status": "error", "error": "Missing preference name."}
+
+    value = (value or "").strip()
+    if not value:
+        db.delete_preference(ctx.user_id, key)
+        return {"status": "ok", "removed": key}
+
+    db.set_preference(ctx.user_id, key, value)
+    logger.info("Preferência %r guardada para o utilizador %s.", key, ctx.user_id)
+    return {"status": "ok", "preference": {key: value}}
+
+
+# ---------------------------------------------------------------------------
+# Contexto de memória (usado na construção do bloco volátil do prompt)
 # ---------------------------------------------------------------------------
 def get_daily_context(user_id: int) -> str:
     """Resumo curto do dia, injectado no prompt para respostas mais directas."""
@@ -493,24 +614,26 @@ def get_daily_context(user_id: int) -> str:
     today = db.get_events_between(user_id, start, end)
 
     if not today:
-        return "Não há compromissos registados para hoje."
+        return "Nothing scheduled today."
 
-    linhas = [f"- {format_short(event['event_time'])[11:]} — {event['description']}" for event in today]
-    return "Compromissos de hoje:\n" + "\n".join(linhas)
+    linhas = [f"- {format_time(event['event_time'])} {event['description']}" for event in today]
+    return "Today: " + "; ".join(linha[2:] for linha in linhas)
 
 
 # ---------------------------------------------------------------------------
 # Esquemas no formato OpenAI / DeepSeek
+#
+# São reenviados em TODAS as chamadas à API, por isso cada palavra aqui é paga
+# vezes sem conta. As descrições foram reduzidas ao mínimo que preserva a
+# distinção entre ferramentas — sobretudo entre `add_event` (compromisso com
+# hora marcada) e `set_reminder` (aviso solto).
 # ---------------------------------------------------------------------------
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
             "name": "get_current_datetime",
-            "description": (
-                "Devolve a data e a hora actuais. Use sempre esta ferramenta antes de "
-                "raciocinar sobre datas relativas (hoje, amanhã, esta semana)."
-            ),
+            "description": "Current date and time. Call before reasoning about relative dates.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -519,25 +642,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "add_event",
             "description": (
-                "Guarda um compromisso na agenda do utilizador e agenda automaticamente "
-                "um lembrete 15 minutos antes. Use quando o utilizador marca uma reunião, "
-                "consulta, jantar, viagem ou qualquer evento com data."
+                "Save a diary appointment (meeting, trip, dinner); also schedules an "
+                "alert 15 min before. Use when the thing happens at a time."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "date": {
-                        "type": "string",
-                        "description": (
-                            "Data e hora do evento em linguagem natural ou ISO. "
-                            "Exemplos: 'amanhã às 15:00', 'sexta-feira às 9h30', "
-                            "'12/09/2026 18:00'."
-                        ),
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Descrição curta do compromisso, em português.",
-                    },
+                    "date": {"type": "string", "description": "When. Natural language or ISO."},
+                    "description": {"type": "string", "description": "Short description."},
                 },
                 "required": ["date", "description"],
             },
@@ -547,19 +659,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_events",
-            "description": (
-                "Procura compromissos na agenda. A consulta pode ser uma data "
-                "('hoje', 'amanhã', '15/09'), uma palavra-chave ('dentista') ou ficar "
-                "vazia para devolver os próximos compromissos."
-            ),
+            "description": "Look up the diary. Query: a date, a keyword, or empty for upcoming.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Data ou palavra-chave a procurar. Pode ser uma string vazia.",
-                    }
-                },
+                "properties": {"query": {"type": "string", "description": "Date or keyword. May be empty."}},
                 "required": ["query"],
             },
         },
@@ -568,15 +671,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "save_note",
-            "description": (
-                "Guarda uma nota com data/hora: ideias, listas, dados a recordar, "
-                "preferências pessoais ou qualquer informação sem data associada."
-            ),
+            "description": "Save a fact worth keeping: ideas, lists, preferences, anything undated.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "Conteúdo da nota."}
-                },
+                "properties": {"content": {"type": "string", "description": "Note text."}},
                 "required": ["content"],
             },
         },
@@ -585,14 +683,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_notes",
-            "description": (
-                "Procura nas notas guardadas. Consulta vazia devolve as notas mais recentes."
-            ),
+            "description": "Search saved notes. Empty query returns the most recent.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Texto a procurar nas notas."}
-                },
+                "properties": {"query": {"type": "string", "description": "Text to search."}},
                 "required": ["query"],
             },
         },
@@ -602,24 +696,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "set_reminder",
             "description": (
-                "Agenda um lembrete pontual que será enviado ao utilizador no Telegram. "
-                "Use para avisos sem compromisso associado ('lembra-me de tomar o "
-                "medicamento às 9:00')."
+                "Schedule a one-off alert with no diary entry, e.g. 'remind me to take "
+                "the pill at 9'. Use when nothing is being booked."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Texto a enviar quando o lembrete disparar.",
-                    },
-                    "time": {
-                        "type": "string",
-                        "description": (
-                            "Hora do lembrete em linguagem natural ou ISO. Exemplos: "
-                            "'9:00', 'daqui a 30 minutos', 'amanhã às 8h'."
-                        ),
-                    },
+                    "message": {"type": "string", "description": "Text to send."},
+                    "time": {"type": "string", "description": "When. Natural language or ISO."},
                 },
                 "required": ["message", "time"],
             },
@@ -629,8 +713,63 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_reminders",
-            "description": "Lista os lembretes ainda por disparar do utilizador.",
+            "description": "List alerts that have not fired yet.",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_item",
+            "description": (
+                "Delete an event, note or alert. Search first to get its id; if several "
+                "match, ask which one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["event", "note", "reminder"]},
+                    "id": {"type": "integer", "description": "Id from a search result."},
+                },
+                "required": ["kind", "id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_event",
+            "description": (
+                "Move or rename an existing appointment, rescheduling its alert. "
+                "Use for 'push the dentist to 4pm'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "Id from a search result."},
+                    "date": {"type": "string", "description": "New date/time. Omit to keep."},
+                    "description": {"type": "string", "description": "New description. Omit to keep."},
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_preference",
+            "description": (
+                "Persist a lasting preference about how to behave, e.g. name to use, "
+                "tone, emoji. Empty value removes it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Short name, e.g. 'call_me'."},
+                    "value": {"type": "string", "description": "Value. Empty to remove."},
+                },
+                "required": ["key", "value"],
+            },
         },
     },
 ]
@@ -647,19 +786,22 @@ _REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "search_notes": search_notes,
     "set_reminder": set_reminder,
     "list_reminders": list_reminders,
+    "delete_item": delete_item,
+    "update_event": update_event,
+    "set_preference": set_preference,
 }
 
 
 def execute_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Executa uma ferramenta pelo nome, devolvendo sempre um dicionário.
 
-    Erros nunca são propagados: viram um resultado de estado "erro" que o modelo
-    consegue explicar ao utilizador.
+    Erros nunca são propagados: viram um resultado de estado "error" que o
+    modelo consegue explicar ao utilizador.
     """
     function = _REGISTRY.get(name)
     if function is None:
         logger.warning("Ferramenta desconhecida pedida pelo modelo: %s", name)
-        return {"estado": "erro", "erro": f"A ferramenta {name!r} não existe."}
+        return {"status": "error", "error": f"No such tool: {name}."}
 
     try:
         # Só os argumentos previstos são passados adiante — o modelo pode
@@ -669,10 +811,10 @@ def execute_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> dict
         return function(ctx, **kwargs)
     except TypeError as exc:
         logger.warning("Argumentos inválidos para %s: %s", name, exc)
-        return {"estado": "erro", "erro": f"Argumentos inválidos para {name}: {exc}"}
+        return {"status": "error", "error": f"Bad arguments for {name}: {exc}"}
     except Exception as exc:  # noqa: BLE001 — resiliência é intencional aqui
         logger.exception("Erro ao executar a ferramenta %s.", name)
-        return {"estado": "erro", "erro": f"Falha interna ao executar {name}: {exc}"}
+        return {"status": "error", "error": f"{name} failed: {exc}"}
 
 
 def _allowed_arguments(name: str) -> set[str]:

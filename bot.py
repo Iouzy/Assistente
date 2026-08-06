@@ -2,17 +2,21 @@
 
 Este módulo só trata da camada Telegram: recebe mensagens, constrói o
 `ToolContext`, delega o raciocínio em `llm.generate_reply` e devolve a resposta.
-Os comandos (`/hoje`, `/notas`, ...) respondem directamente a partir da base de
-dados — são consultas determinísticas que não justificam gastar tokens.
+
+Os comandos (`/today`, `/notes`, ...) e os botões do menu respondem
+directamente a partir da base de dados — são consultas determinísticas que não
+justificam gastar tokens. É por isso que os botões existem: cada toque num
+deles é uma consulta que custa zero.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 
-from telegram import Update
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -35,27 +39,52 @@ logger = logging.getLogger(__name__)
 # Limite de caracteres por mensagem imposto pelo Telegram.
 TELEGRAM_MAX_LENGTH = 4096
 
+# ---------------------------------------------------------------------------
+# Menu de botões
+#
+# Um `ReplyKeyboardMarkup` fica fixo por cima da caixa de texto. Tocar num
+# botão envia o respectivo texto como mensagem normal, por isso há um handler
+# com filtro exacto (registado *antes* do handler genérico) que os intercepta e
+# os trata como comandos — sem nunca chegarem ao modelo.
+# ---------------------------------------------------------------------------
+BTN_TODAY = "📅 Today"
+BTN_AGENDA = "🗓️ Agenda"
+BTN_NOTES = "📝 Notes"
+BTN_REMINDERS = "⏰ Reminders"
+BTN_HELP = "❓ Help"
+
+MENU = ReplyKeyboardMarkup(
+    [[BTN_TODAY, BTN_AGENDA], [BTN_NOTES, BTN_REMINDERS], [BTN_HELP]],
+    resize_keyboard=True,
+    is_persistent=True,
+    input_field_placeholder="Tell me anything…",
+)
+
 WELCOME = (
-    "Olá, {nome}! 👋\n\n"
-    "Sou o teu assistente pessoal. Fala comigo em linguagem natural — eu trato do resto:\n\n"
-    "🗓️ *Agenda* — «marca dentista quinta às 15h» (aviso automático 15 min antes)\n"
-    "⏰ *Lembretes* — «lembra-me de tomar o comprimido às 9:00»\n"
-    "📝 *Notas* — «guarda que o wi-fi do escritório é Torre2024»\n"
-    "🔎 *Consultas* — «o que tenho hoje?», «o que sabes sobre o carro?»\n\n"
-    "Também converso sobre outros assuntos. Escreve /ajuda para veres os comandos."
+    "Hi {name}! 👋\n\n"
+    "I'm your personal assistant. Just talk to me — no commands needed:\n\n"
+    "🗓️ *Diary* — “dentist on Thursday at 3pm” (I'll alert you 15 min before)\n"
+    "⏰ *Reminders* — “remind me to take the pill at 9”\n"
+    "📝 *Notes* — “remember the office wifi is Torre2024”\n"
+    "🔎 *Lookups* — “what's on today?”, “what do you know about the car?”\n\n"
+    "The buttons below are instant lookups — and they cost nothing to run."
 )
 
 HELP = (
-    "*Comandos disponíveis*\n\n"
-    "/hoje — compromissos de hoje\n"
-    "/agenda — próximos compromissos\n"
-    "/notas — notas mais recentes\n"
-    "/lembretes — lembretes por disparar\n"
-    "/esquecer — limpa a conversa recente da minha memória curta\n"
-    "/ajuda — esta mensagem\n\n"
-    "Mas não precisas de comandos: basta escreveres normalmente.\n"
-    "_Exemplos:_ «amanhã às 10h tenho consulta», «o que tenho na sexta?», "
-    "«apontamento: o código do alarme é 4471»."
+    "*What I can do*\n\n"
+    "Just write naturally:\n"
+    "• “lunch with Ana tomorrow at 1pm” → saved to the diary + alert\n"
+    "• “remind me to call the garage at 5” → one-off alert\n"
+    "• “note: the alarm code is 4471” → saved\n"
+    "• “what's on Friday?” → looked up\n\n"
+    "*Buttons and commands*\n"
+    "📅 /today — today's appointments\n"
+    "🗓️ /agenda — what's coming up\n"
+    "📝 /notes — most recent notes\n"
+    "⏰ /reminders — alerts not yet fired\n"
+    "🧹 /forget — clear our recent chat from my short-term memory\n"
+    "❓ /help — this message\n\n"
+    "_The buttons answer straight from the database, so they're free._"
 )
 
 
@@ -91,18 +120,23 @@ def _split_message(text: str) -> list[str]:
     return blocks
 
 
-async def send_text(bot, chat_id: int, text: str) -> None:
+async def send_text(bot, chat_id: int, text: str, reply_markup=None) -> None:
     """Envia texto tentando Markdown e caindo para texto simples se falhar.
 
     O modelo pode gerar asteriscos ou underscores desemparelhados, o que faz o
     Telegram rejeitar a mensagem — nesse caso reenviamos sem formatação.
     """
-    for block in _split_message(text):
+    blocks = _split_message(text)
+    for indice, block in enumerate(blocks):
+        # O teclado só vai na última parte, para não piscar entre blocos.
+        markup = reply_markup if indice == len(blocks) - 1 else None
         try:
-            await bot.send_message(chat_id=chat_id, text=block, parse_mode=ParseMode.MARKDOWN)
+            await bot.send_message(
+                chat_id=chat_id, text=block, parse_mode=ParseMode.MARKDOWN, reply_markup=markup
+            )
         except BadRequest as exc:
             logger.debug("Markdown rejeitado (%s); a reenviar em texto simples.", exc)
-            await bot.send_message(chat_id=chat_id, text=block)
+            await bot.send_message(chat_id=chat_id, text=block, reply_markup=markup)
 
 
 # ---------------------------------------------------------------------------
@@ -110,12 +144,14 @@ async def send_text(bot, chat_id: int, text: str) -> None:
 # ---------------------------------------------------------------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ctx = _context_from(update)
-    await send_text(context.bot, ctx.chat_id, WELCOME.format(nome=ctx.first_name or "olá"))
+    await send_text(
+        context.bot, ctx.chat_id, WELCOME.format(name=ctx.first_name or "there"), reply_markup=MENU
+    )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ctx = _context_from(update)
-    await send_text(context.bot, ctx.chat_id, HELP)
+    await send_text(context.bot, ctx.chat_id, HELP, reply_markup=MENU)
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -127,17 +163,14 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not events:
         await send_text(
-            context.bot,
-            ctx.chat_id,
-            "Hoje tens a agenda livre. 🎉\nQueres que marque alguma coisa?",
+            context.bot, ctx.chat_id, "Nothing on today. 🎉\nWant me to book something?"
         )
         return
 
-    linhas = [f"🗓️ *Hoje* — {tools.format_datetime(now).split(' às ')[0]}\n"]
+    linhas = [f"📅 *Today* — {start:%d/%m/%Y}\n"]
     for event in events:
-        hora = tools.format_short(event["event_time"])[11:]
-        passado = "✅ " if tools.to_datetime(event["event_time"]) < now else "• "
-        linhas.append(f"{passado}*{hora}* — {event['description']}")
+        marca = "✅" if tools.to_datetime(event["event_time"]) < now else "•"
+        linhas.append(f"{marca} *{tools.format_time(event['event_time'])}* — {event['description']}")
     await send_text(context.bot, ctx.chat_id, "\n".join(linhas))
 
 
@@ -148,13 +181,11 @@ async def cmd_agenda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     if not events:
         await send_text(
-            context.bot,
-            ctx.chat_id,
-            "Não tens compromissos futuros registados. Queres marcar algum?",
+            context.bot, ctx.chat_id, "Nothing coming up. Want to book something?"
         )
         return
 
-    linhas = ["🗓️ *Próximos compromissos*\n"]
+    linhas = ["🗓️ *Coming up*\n"]
     linhas += [
         f"• *{tools.format_short(event['event_time'])}* — {event['description']}"
         for event in events
@@ -169,13 +200,11 @@ async def cmd_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not notes:
         await send_text(
-            context.bot,
-            ctx.chat_id,
-            "Ainda não tens notas guardadas. Diz-me «guarda que...» e eu aponto. 📝",
+            context.bot, ctx.chat_id, "No notes yet. Say “remember that…” and I'll jot it down. 📝"
         )
         return
 
-    linhas = ["📝 *Notas recentes*\n"]
+    linhas = ["📝 *Recent notes*\n"]
     linhas += [
         f"• {note['content']}\n  _{tools.format_short(note['created_at'])}_" for note in notes
     ]
@@ -188,10 +217,10 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     reminders = db.get_user_reminders(ctx.user_id, limit=15)
 
     if not reminders:
-        await send_text(context.bot, ctx.chat_id, "Não tens lembretes pendentes. ⏰")
+        await send_text(context.bot, ctx.chat_id, "No pending alerts. ⏰")
         return
 
-    linhas = ["⏰ *Lembretes pendentes*\n"]
+    linhas = ["⏰ *Pending alerts*\n"]
     for reminder in reminders:
         etiqueta = "🗓️" if reminder["kind"] == "event" else "⏰"
         primeira_linha = reminder["message"].splitlines()[0]
@@ -202,15 +231,37 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Limpa a memória de curto prazo (eventos, notas e resumos mantêm-se)."""
+    """Arruma e limpa a memória de curto prazo, sem perder o que foi dito."""
     ctx = _context_from(update)
+    # Resume antes de esquecer: o que foi dito fica na memória de longo prazo.
+    await asyncio.to_thread(llm.flush_user, ctx.user_id)
     llm.reset_history(ctx.user_id)
     await send_text(
         context.bot,
         ctx.chat_id,
-        "Feito — esqueci a conversa recente. 🧹\n"
-        "_Os teus eventos, notas e lembretes continuam guardados._",
+        "Done — recent chat cleared. 🧹\n"
+        "_Anything worth remembering was filed away first; your events, notes "
+        "and alerts are untouched._",
     )
+
+
+# ---------------------------------------------------------------------------
+# Botões do menu
+# ---------------------------------------------------------------------------
+_BUTTON_ROUTES = {
+    BTN_TODAY: cmd_today,
+    BTN_AGENDA: cmd_agenda,
+    BTN_NOTES: cmd_notes,
+    BTN_REMINDERS: cmd_reminders,
+    BTN_HELP: cmd_help,
+}
+
+
+async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trata um toque no menu como se fosse o comando correspondente."""
+    handler = _BUTTON_ROUTES.get((update.message.text or "").strip())
+    if handler is not None:
+        await handler(update, context)
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +289,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await send_text(
             context.bot,
             ctx.chat_id,
-            "⚠️ Aconteceu um erro inesperado do meu lado. Já ficou registado — tenta novamente.",
+            "⚠️ Something went wrong on my side. It's been logged — please try again.",
         )
         return
 
@@ -251,8 +302,7 @@ async def handle_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await send_text(
         context.bot,
         ctx.chat_id,
-        "Por agora só consigo ler mensagens de texto. 🙈\n"
-        "_Áudio e imagens estão na lista de melhorias futuras._",
+        "I can only read text for now. 🙈\n_Voice and images are on the roadmap._",
     )
 
 
@@ -267,7 +317,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="⚠️ Ocorreu um erro a processar o teu pedido. Podes tentar de novo?",
+                text="⚠️ Something went wrong handling that. Mind trying again?",
             )
         except Exception:  # noqa: BLE001 — o aviso é best-effort
             logger.debug("Não foi possível avisar o utilizador do erro.")
@@ -279,12 +329,17 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 def register_handlers(application: Application) -> None:
     """Liga todos os handlers à aplicação do Telegram."""
     application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler(["ajuda", "help"], cmd_help))
-    application.add_handler(CommandHandler("hoje", cmd_today))
+    application.add_handler(CommandHandler(["help", "ajuda"], cmd_help))
+    application.add_handler(CommandHandler(["today", "hoje"], cmd_today))
     application.add_handler(CommandHandler("agenda", cmd_agenda))
-    application.add_handler(CommandHandler("notas", cmd_notes))
-    application.add_handler(CommandHandler("lembretes", cmd_reminders))
-    application.add_handler(CommandHandler("esquecer", cmd_forget))
+    application.add_handler(CommandHandler(["notes", "notas"], cmd_notes))
+    application.add_handler(CommandHandler(["reminders", "lembretes"], cmd_reminders))
+    application.add_handler(CommandHandler(["forget", "esquecer"], cmd_forget))
+
+    # Os botões têm de ser interceptados ANTES do handler genérico de texto,
+    # senão o seu conteúdo seguia para o modelo e custava tokens.
+    botoes = "|".join(re.escape(rotulo) for rotulo in _BUTTON_ROUTES)
+    application.add_handler(MessageHandler(filters.Regex(f"^({botoes})$"), handle_button))
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(

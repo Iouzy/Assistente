@@ -24,6 +24,7 @@ from telegram.ext import Application, ApplicationBuilder
 
 import bot as bot_module
 import database as db
+import llm
 import scheduler
 from config import ConfigError, settings
 
@@ -31,12 +32,12 @@ logger = logging.getLogger(__name__)
 
 # Comandos apresentados no menu do Telegram.
 BOT_COMMANDS = [
-    BotCommand("hoje", "Compromissos de hoje"),
-    BotCommand("agenda", "Próximos compromissos"),
-    BotCommand("notas", "Notas mais recentes"),
-    BotCommand("lembretes", "Lembretes por disparar"),
-    BotCommand("esquecer", "Limpar a conversa recente"),
-    BotCommand("ajuda", "Como usar o assistente"),
+    BotCommand("today", "Today's appointments"),
+    BotCommand("agenda", "What's coming up"),
+    BotCommand("notes", "Most recent notes"),
+    BotCommand("reminders", "Alerts not yet fired"),
+    BotCommand("forget", "Clear our recent chat"),
+    BotCommand("help", "How to use the assistant"),
 ]
 
 
@@ -98,6 +99,12 @@ async def on_startup(application: Application) -> None:
     loop = asyncio.get_running_loop()
     scheduler.start(build_notifier(application, loop))
 
+    # Arruma periodicamente as conversas paradas: se o processo for morto sem
+    # encerramento limpo (fechar a janela, falha de energia), o que já foi
+    # resumido está a salvo na base de dados.
+    if settings.idle_flush_minutes > 0:
+        scheduler.schedule_recurring(llm.flush_idle, minutes=10, job_id="flush-idle")
+
     try:
         await application.bot.set_my_commands(BOT_COMMANDS)
     except Exception:  # noqa: BLE001 — o menu é acessório
@@ -108,8 +115,21 @@ async def on_startup(application: Application) -> None:
 
 
 async def on_shutdown(application: Application) -> None:
-    """Encerramento ordenado: pára o scheduler e fecha a base de dados."""
+    """Encerramento ordenado: guarda a memória, pára o scheduler, fecha a BD."""
     scheduler.shutdown(wait=False)
+
+    # Conversas que nunca atingiram o limite de resumo só existem em RAM.
+    # Sem isto, desligar o bot apagava-as sem deixar rasto. O limite de tempo
+    # evita que uma API lenta prenda o encerramento indefinidamente.
+    try:
+        guardadas = await asyncio.wait_for(asyncio.to_thread(llm.flush_all), timeout=60)
+        if guardadas:
+            logger.info("%d conversa(s) guardada(s) na memória de longo prazo.", guardadas)
+    except asyncio.TimeoutError:
+        logger.warning("A guardar a memória demorou demasiado; a encerrar na mesma.")
+    except Exception:  # noqa: BLE001 — encerrar nunca pode falhar por isto
+        logger.exception("Falha ao guardar a memória no encerramento.")
+
     db.close_db()
     logger.info("Assistente encerrado.")
 
