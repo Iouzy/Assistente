@@ -253,9 +253,23 @@ poucos cêntimos. Vale a pena correr sempre que se mexer nas descrições em
 
 | Ficheiro | Para quê |
 |---|---|
+| **`windows/painel.vbs`** | **Painel de controlo: ligar, parar, ver a consola, actualizar** |
 | `windows/iniciar_bot.bat` | Arranca com janela visível — bom para testar |
 | `windows/iniciar_oculto.vbs` | Arranca **sem janela**, via `pythonw.exe` |
 | `windows/parar_bot.bat` | Pára o bot que corre sem janela |
+
+**O caminho mais simples** é fazer um atalho para `windows/painel.vbs` no
+Ambiente de Trabalho: uma janela com estado, botões Ligar/Parar, a consola do
+bot ao vivo e um botão que faz `git pull`.
+
+O botão **Parar** não mata o processo: cria o ficheiro `.stop-assistente`, que
+o `main.py` vigia, e o bot encerra ordenadamente — a memória de curto prazo é
+gravada antes de sair. Só ao fim de 30 segundos sem obedecer é que é terminado
+à força.
+
+O botão **Actualizar** faz `git pull` e, comparando os ficheiros entre commits,
+reinstala as dependências se o `requirements.txt` mudar e propõe reabrir-se se
+o próprio painel tiver sido actualizado (o código em memória é o do arranque).
 
 **Arrancar sozinho ao iniciar sessão:** `Windows`+`R` → `shell:startup` →
 copiar para lá um **atalho** para `iniciar_oculto.vbs`.
