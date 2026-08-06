@@ -23,3 +23,4 @@ env/
 .vscode/
 .idea/
 .DS_Store
+.stop-assistente

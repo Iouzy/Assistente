@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pathlib
 import sys
 from logging.handlers import RotatingFileHandler
 
@@ -29,6 +30,11 @@ import scheduler
 from config import ConfigError, settings
 
 logger = logging.getLogger(__name__)
+
+# Ficheiro-sentinela: criá-lo pede ao bot que encerre ordenadamente. É como o
+# painel de controlo o desliga — matar o processo à força saltaria o
+# encerramento e perderia a memória de curto prazo por gravar.
+STOP_FILE = pathlib.Path(".stop-assistente")
 
 # Comandos apresentados no menu do Telegram.
 BOT_COMMANDS = [
@@ -95,10 +101,36 @@ def build_notifier(application: Application, loop: asyncio.AbstractEventLoop):
     return notify
 
 
+async def watch_stop_file(application: Application) -> None:
+    """Encerra o bot quando aparecer o ficheiro-sentinela.
+
+    Em Windows não há forma fiável de enviar um sinal a um processo sem consola,
+    por isso o painel de controlo pede a paragem criando um ficheiro. O
+    encerramento passa a ser o mesmo do `Ctrl+C`: a memória é gravada.
+    """
+    while True:
+        await asyncio.sleep(2)
+        try:
+            if STOP_FILE.exists():
+                STOP_FILE.unlink(missing_ok=True)
+                logger.info("Pedido de paragem recebido. A encerrar...")
+                application.stop_running()
+                return
+        except asyncio.CancelledError:
+            raise
+        except OSError:
+            logger.debug("Não foi possível verificar o ficheiro de paragem.", exc_info=True)
+
+
 async def on_startup(application: Application) -> None:
     """Executado depois de o event loop arrancar, antes do polling."""
     loop = asyncio.get_running_loop()
     scheduler.start(build_notifier(application, loop))
+
+    # Um ficheiro deixado de uma execução anterior desligaria o bot logo a
+    # seguir ao arranque.
+    STOP_FILE.unlink(missing_ok=True)
+    application.create_task(watch_stop_file(application))
 
     # Arruma periodicamente as conversas paradas: se o processo for morto sem
     # encerramento limpo (fechar a janela, falha de energia), o que já foi

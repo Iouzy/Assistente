@@ -354,6 +354,36 @@ check("dono NÃO pode ser retirado", not db.revoke_access(555))
 bot.settings = _original
 bot.refresh_access_cache()
 
+# --- paragem por ficheiro (usada pelo painel de controlo) -------------------
+import main as _main  # noqa: E402
+
+
+class _AppFalsa:
+    def __init__(self):
+        self.parado = False
+
+    def stop_running(self):
+        self.parado = True
+
+
+async def _cenario_paragem():
+    app = _AppFalsa()
+    tarefa = asyncio.create_task(_main.watch_stop_file(app))
+    await asyncio.sleep(0.3)
+    sem_ficheiro = not app.parado
+
+    _main.STOP_FILE.write_text("stop", encoding="utf-8")
+    await asyncio.sleep(3)
+    tarefa.cancel()
+    return sem_ficheiro, app.parado, _main.STOP_FILE.exists(), tarefa
+
+
+_sem, _parou, _resta, _tarefa = asyncio.run(_cenario_paragem())
+check("vigia ignora a ausência do ficheiro", _sem)
+check("ficheiro-sentinela pede encerramento ordenado", _parou)
+check("ficheiro-sentinela é limpo depois de lido", not _resta)
+_main.STOP_FILE.unlink(missing_ok=True)
+
 # --- encerramento -----------------------------------------------------------
 scheduler.shutdown(wait=True)
 db.close_db()
