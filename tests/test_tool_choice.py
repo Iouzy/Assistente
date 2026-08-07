@@ -82,6 +82,33 @@ CASOS: list[tuple[str, object]] = [
     ("remember the office wifi is Torre2024", "save_note"),
     ("what was the alarm code?", "search_notes"),
 
+    # --- linha do tempo: coisas que já aconteceram ---
+    # Casos inequívocos: passado explícito, com ou sem dia.
+    ("we went to the aquarium today", "log_moment"),
+    ("fui ao oceanário hoje", "log_moment"),
+    ("hoje contaram-me que a fábrica vai fechar", "log_moment"),
+    ("Bia went to the dentist yesterday", "log_moment"),
+    ("a Bia foi ao dentista ontem", "log_moment"),
+    ("watched the new episode tonight", "log_moment"),
+    ("vi este filme hoje", "log_moment"),
+    ("saw a great film last thursday", "log_moment"),
+
+    # A fronteira delicada: é experiência ou é facto? A persona manda na
+    # linha do tempo quando é as duas coisas, mas o modelo é que decide.
+    ("aprendi hoje a fazer pão", {"log_moment", "save_note"}),
+    ("someone told me the shop closes at 8", {"log_moment", "save_note"}),
+    ("I learnt that Ana is moving to Porto", {"log_moment", "save_note"}),
+
+    # Não deve ir para a linha do tempo: factos sem carácter temporal.
+    ("the alarm code is 4471", "save_note"),
+    ("my shoe size is 43", "save_note"),
+
+    # --- consultar a linha do tempo ---
+    ("what happened yesterday?", "search_timeline"),
+    ("o que aconteceu ontem?", "search_timeline"),
+    ("what did I do last week?", "search_timeline"),
+    ("when did we go to the aquarium?", "search_timeline"),
+
     # --- apagar e alterar (precisam de procurar primeiro) ---
     ("cancel the dentist", "delete_item"),
     ("delete that note about the wifi", "delete_item"),
@@ -104,7 +131,8 @@ CASOS: list[tuple[str, object]] = [
 # Ferramentas de consulta: são só de leitura, por isso corremos as verdadeiras
 # contra a base de dados semeada e deixamos o modelo continuar. O que interessa
 # avaliar é a acção que ele toma **a seguir**.
-CONSULTAS = {"get_current_datetime", "search_events", "search_notes", "list_reminders"}
+CONSULTAS = {"get_current_datetime", "search_events", "search_notes", "list_reminders",
+             "search_timeline"}
 
 
 def semear(ctx: ToolContext) -> None:
@@ -127,6 +155,11 @@ def semear(ctx: ToolContext) -> None:
     db.create_reminder(
         ctx.user_id, ctx.chat_id, "take the pill", agora + timedelta(hours=6), kind="simple"
     )
+    # Linha do tempo já com alguma coisa, pela mesma razão: uma consulta que só
+    # pode devolver vazio não distingue quem escolheu bem de quem não escolheu.
+    db.create_moment(ctx.user_id, "went to the aquarium with Bia", agora.date() - timedelta(days=3))
+    db.create_moment(ctx.user_id, "Bia said the results came back fine", agora.date() - timedelta(days=1))
+    db.create_moment(ctx.user_id, "finished the series about the lighthouse", agora.date() - timedelta(days=1))
 
 
 def escolha_do_modelo(ctx: ToolContext, mensagem: str) -> tuple[list[str], dict, dict]:
