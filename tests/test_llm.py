@@ -6,6 +6,13 @@ import sys
 import tempfile
 import types
 
+# Em Windows, redirecionar a saída para um ficheiro (`> resultado.txt`) faz o
+# Python largar o UTF-8 e usar a codificação local (cp1252), que não sabe
+# escrever emojis — e o teste rebentava com UnicodeEncodeError logo na
+# primeira linha de resultado. Forçamos UTF-8 na saída.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 os.environ.setdefault("TELEGRAM_TOKEN", "123:FAKE")
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-fake")
 os.environ["DATABASE_PATH"] = os.path.join(tempfile.mkdtemp(), "loop.db")
