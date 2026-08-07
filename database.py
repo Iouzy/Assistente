@@ -20,7 +20,7 @@ import pathlib
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Iterator, Optional
 
 import safety
@@ -132,6 +132,25 @@ def init_db() -> None:
                 created_at TEXT    NOT NULL
             );
 
+            -- Pequenos acontecimentos, arrumados pelo dia em que aconteceram.
+            --
+            -- Separado das notas por causa da data: uma nota guarda *quando
+            -- foi escrita*, e aqui o que interessa é *quando aconteceu* — se
+            -- ao domingo se contar uma ida ao dentista na quinta, a linha do
+            -- tempo tem de a pôr na quinta.
+            --
+            -- `happened_on` é um dia (YYYY-MM-DD), sem hora nem fuso. Além de
+            -- ser o que se pretende, evita a comparação de textos ISO com
+            -- deslocamento, que troca a ordem na hora repetida do fim do
+            -- horário de verão.
+            CREATE TABLE IF NOT EXISTS moments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                content     TEXT    NOT NULL,
+                happened_on TEXT    NOT NULL,   -- YYYY-MM-DD (dia local)
+                created_at  TEXT    NOT NULL
+            );
+
             -- Resumos da conversa (memória de longo prazo).
             CREATE TABLE IF NOT EXISTS summaries (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,6 +196,8 @@ def init_db() -> None:
                 ON events (user_id, event_time);
             CREATE INDEX IF NOT EXISTS idx_notes_user_created
                 ON notes (user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_moments_user_day
+                ON moments (user_id, happened_on);
             CREATE INDEX IF NOT EXISTS idx_summaries_user_created
                 ON summaries (user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_reminders_pending
@@ -399,6 +420,77 @@ def list_notes(user_id: int, limit: int = 20) -> list[dict[str, Any]]:
 def delete_note(user_id: int, note_id: int) -> bool:
     with _cursor() as cur:
         cur.execute("DELETE FROM notes WHERE id = ? AND user_id = ?", (note_id, user_id))
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Linha do tempo (acontecimentos passados)
+# ---------------------------------------------------------------------------
+def create_moment(user_id: int, content: str, happened_on: date) -> dict[str, Any]:
+    """Regista um acontecimento no dia em que aconteceu."""
+    created_at = datetime.now(settings.tzinfo).isoformat()
+    dia = happened_on.isoformat()
+    with _cursor() as cur:
+        cur.execute(
+            "INSERT INTO moments (user_id, content, happened_on, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, content.strip(), dia, created_at),
+        )
+        return {
+            "id": int(cur.lastrowid),
+            "user_id": user_id,
+            "content": content.strip(),
+            "happened_on": dia,
+            "created_at": created_at,
+        }
+
+
+def get_moments_between(
+    user_id: int, start_day: date, end_day: date, limit: int = 100
+) -> list[dict[str, Any]]:
+    """Acontecimentos entre dois dias, ambos incluídos, do mais recente ao mais antigo."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM moments
+            WHERE user_id = ? AND happened_on >= ? AND happened_on <= ?
+            ORDER BY happened_on DESC, id ASC
+            LIMIT ?
+            """,
+            (user_id, start_day.isoformat(), end_day.isoformat(), limit),
+        )
+        return [_row_to_dict(row) for row in cur.fetchall()]
+
+
+def list_moments(user_id: int, limit: int = 30) -> list[dict[str, Any]]:
+    """Os acontecimentos mais recentes, do mais recente ao mais antigo."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM moments WHERE user_id = ?
+            ORDER BY happened_on DESC, id ASC LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        return [_row_to_dict(row) for row in cur.fetchall()]
+
+
+def search_moments_by_text(user_id: int, text: str, limit: int = 30) -> list[dict[str, Any]]:
+    with _cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM moments
+            WHERE user_id = ? AND lower(content) LIKE ?
+            ORDER BY happened_on DESC, id ASC
+            LIMIT ?
+            """,
+            (user_id, f"%{text.lower().strip()}%", limit),
+        )
+        return [_row_to_dict(row) for row in cur.fetchall()]
+
+
+def delete_moment(user_id: int, moment_id: int) -> bool:
+    with _cursor() as cur:
+        cur.execute("DELETE FROM moments WHERE id = ? AND user_id = ?", (moment_id, user_id))
         return cur.rowcount > 0
 
 

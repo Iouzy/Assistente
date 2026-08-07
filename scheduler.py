@@ -255,9 +255,21 @@ def _fire_reminder(reminder_id: int, late: bool = False) -> None:
             logger.error("Sem notificador configurado; lembrete #%s não enviado.", reminder_id)
             return
 
-        _notifier(int(reminder["chat_id"]), _format_reminder(reminder, late))
+        # Entregamos ao **utilizador**, não ao `chat_id` gravado com o lembrete.
+        # Em conversa privada são o mesmo número, mas os registos criados antes
+        # de os handlers passarem a ser só privados guardaram o chat_id de um
+        # grupo — e continuariam a ser entregues lá, à frente de toda a gente.
+        destino = int(reminder["user_id"])
+        if destino != int(reminder["chat_id"]):
+            logger.warning(
+                "Lembrete #%s tinha sido criado no chat %s; entregue em privado ao %s.",
+                reminder_id,
+                reminder["chat_id"],
+                destino,
+            )
+        _notifier(destino, _format_reminder(reminder, late))
         db.mark_reminder_fired(reminder_id)
-        logger.info("Lembrete #%s enviado ao chat %s.", reminder_id, reminder["chat_id"])
+        logger.info("Lembrete #%s enviado ao utilizador %s.", reminder_id, destino)
     except Exception:
         # Nunca deixar uma excepção escapar para a thread do APScheduler.
         logger.exception("Falha ao disparar o lembrete #%s.", reminder_id)

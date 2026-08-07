@@ -131,7 +131,12 @@ print("... a aguardar o disparo do lembrete (4s)")
 time.sleep(4)
 check("lembrete disparou e notificou", len(recebidas) >= 1,
       recebidas[0][1].replace("\n", " | ") if recebidas else "nada recebido")
-check("lembrete foi para o chat certo", recebidas and recebidas[0][0] == 99)
+# A entrega é feita ao utilizador, não ao `chat_id` gravado com o lembrete
+# (aqui 99, de propósito diferente do user_id). Registos antigos, criados
+# quando o bot ainda respondia em grupos, guardaram lá o id do grupo.
+check("lembrete é entregue ao utilizador, não ao chat gravado",
+      recebidas and recebidas[0][0] == ctx.user_id,
+      f"foi para {recebidas[0][0] if recebidas else 'lado nenhum'}")
 
 marcado = [r for r in db.get_pending_reminders() if r["message"] == "Beber água"]
 check("lembrete marcado como disparado", not marcado)
@@ -254,7 +259,8 @@ check("preferência actualizada (upsert)", db.get_preference(42, "tratamento") =
 nomes = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
 esperados = {"get_current_datetime", "add_event", "search_events", "save_note",
              "search_notes", "set_reminder", "list_reminders",
-             "delete_item", "update_event", "set_preference"}
+             "delete_item", "update_event", "set_preference",
+             "log_moment", "search_timeline"}
 check("esquemas completos", nomes == esperados, ", ".join(sorted(nomes)))
 check("esquemas registados no dispatcher", nomes == set(tools._REGISTRY))
 
