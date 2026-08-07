@@ -9,6 +9,13 @@ import sqlite3
 import sys
 import tempfile
 
+# Em Windows, redirecionar a saída para um ficheiro (`> resultado.txt`) faz o
+# Python largar o UTF-8 e usar a codificação local (cp1252), que não sabe
+# escrever emojis — e o teste rebentava com UnicodeEncodeError logo na
+# primeira linha de resultado. Forçamos UTF-8 na saída.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "windows"))
 
 import acessos  # noqa: E402

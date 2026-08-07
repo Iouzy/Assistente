@@ -28,6 +28,13 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 
+# Em Windows, redirecionar a saída para um ficheiro (`> resultado.txt`) faz o
+# Python largar o UTF-8 e usar a codificação local (cp1252), que não sabe
+# escrever emojis — e o teste rebentava com UnicodeEncodeError logo na
+# primeira linha de resultado. Forçamos UTF-8 na saída.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # Base de dados temporária, apagada no fim: os dados reais não são tocados.
 _PASTA_TEMPORARIA = tempfile.mkdtemp(prefix="assistente-ensaio-")
 os.environ["DATABASE_PATH"] = os.path.join(_PASTA_TEMPORARIA, "ensaio.db")
