@@ -537,6 +537,60 @@ def log_moment(ctx: ToolContext, content: str, date: str = "") -> dict[str, Any]
     }
 
 
+def update_moment(
+    ctx: ToolContext, id: int, content: str = "", date: str = ""  # noqa: A002
+) -> dict[str, Any]:
+    """Corrige o texto ou o dia de um acontecimento já registado.
+
+    Sem isto, um pedido para corrigir uma entrada não tinha ferramenta que o
+    servisse — e o modelo, em vez de dizer que não conseguia, inventava uma
+    («update_timeline») e despejava a sintaxe da chamada em texto na conversa.
+    """
+    try:
+        moment_id = int(id)
+    except (TypeError, ValueError):
+        return {"status": "error", "error": f"Invalid id {id!r}."}
+
+    if not db.moment_belongs_to(ctx.user_id, moment_id):
+        return {
+            "status": "error",
+            "error": f"No timeline entry with id {moment_id}. Search the timeline first.",
+        }
+
+    novo_texto = (content or "").strip() or None
+    novo_dia = None
+    if date and date.strip():
+        novo_dia = parse_day(date)
+        if novo_dia is None:
+            return {"status": "error", "error": f"Could not understand the day {date!r}."}
+
+    if novo_texto is None and novo_dia is None:
+        return {
+            "status": "error",
+            "error": "Nothing to change: give new content, a new day, or both.",
+        }
+
+    db.update_moment(ctx.user_id, moment_id, novo_texto, novo_dia)
+    actualizado = db.get_moments_between(
+        ctx.user_id, novo_dia, novo_dia
+    ) if novo_dia else None
+    logger.info("Acontecimento #%s corrigido pelo utilizador %s.", moment_id, ctx.user_id)
+
+    linha = next(
+        (m for m in (actualizado or db.list_moments(ctx.user_id, limit=200))
+         if m["id"] == moment_id),
+        None,
+    )
+    return {
+        "status": "ok",
+        "moment": {
+            "id": moment_id,
+            "content": linha["content"] if linha else novo_texto,
+            "day": format_day(linha["happened_on"]) if linha else format_day(novo_dia),
+        },
+    }
+
+
 def search_timeline(ctx: ToolContext, query: str = "") -> dict[str, Any]:
     """Consulta a linha do tempo por dia, por período, por palavra ou sem filtro."""
     query = (query or "").strip()
@@ -1003,6 +1057,26 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "update_moment",
+            "description": (
+                "Fix the wording or the day of a timeline entry already recorded. "
+                "Search the timeline first to get its id. Use whenever they correct, "
+                "rephrase or translate something you logged."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "Id from a timeline search."},
+                    "content": {"type": "string", "description": "New wording. Omit to keep."},
+                    "date": {"type": "string", "description": "New day. Omit to keep."},
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_timeline",
             "description": (
                 "Look up what happened. Query: a day ('yesterday'), a period "
@@ -1052,6 +1126,7 @@ _REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "delete_item": delete_item,
     "update_event": update_event,
     "log_moment": log_moment,
+    "update_moment": update_moment,
     "search_timeline": search_timeline,
     "set_preference": set_preference,
 }
