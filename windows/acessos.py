@@ -223,12 +223,31 @@ def adicionar(
 
 
 def remover(conexao: sqlite3.Connection, user_id: int) -> bool:
-    """Retira o acesso. O dono não pode ser retirado — devolve False."""
+    """Retira o acesso. O dono não pode ser retirado — devolve False.
+
+    Marca também os lembretes por disparar dessa pessoa como disparados, tal
+    como o `/revoke` do Telegram faz. O bot já não os entregaria (confirma a
+    lista de acesso antes de enviar), mas sem isto ficavam para sempre a dizer
+    «por disparar» na base de dados e os jobs mortos acumulavam-se no
+    scheduler até ao reinício seguinte.
+
+    A tabela `reminders` pode ainda não existir se o bot nunca tiver arrancado;
+    nesse caso não há nada para limpar.
+    """
     with conexao:
         cur = conexao.execute(
             "DELETE FROM access WHERE user_id = ? AND is_owner = 0", (user_id,)
         )
-    return cur.rowcount > 0
+        if cur.rowcount == 0:
+            return False
+        try:
+            conexao.execute(
+                "UPDATE reminders SET fired = 1 WHERE user_id = ? AND fired = 0",
+                (user_id,),
+            )
+        except sqlite3.OperationalError:
+            pass  # base de dados ainda sem a tabela dos lembretes
+    return True
 
 
 def definir_dono(conexao: sqlite3.Connection, user_id: int) -> bool:

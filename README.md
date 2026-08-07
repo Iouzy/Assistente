@@ -470,6 +470,27 @@ de uma cópia em memória, o `main.py` relê a tabela de 10 em 10 segundos
 (`watch_access_list`); é assim que uma permissão dada no painel vale sem
 reiniciar nada.
 
+### 5.4.1. Datas: como são guardadas, e uma limitação conhecida
+
+Compromissos e lembretes são guardados como texto ISO-8601 **com fuso**
+(`2026-08-07T15:00:00+01:00`) e comparados pela base de dados como texto. Isso
+funciona porque a parte da data e da hora vem primeiro e domina a comparação.
+
+**A limitação:** na hora que se repete no fim do horário de verão (o último
+domingo de Outubro, entre a 1h e as 2h), a mesma hora local acontece duas
+vezes, primeiro com `+01:00` e depois com `+00:00`. Como texto, `+00:00`
+ordena antes de `+01:00` — ou seja, ao contrário da ordem real. Dois
+compromissos dentro dessa hora aparecem trocados na agenda.
+
+Acontece uma hora por ano e só com dois registos dentro dela. **A hora a que
+cada lembrete dispara está correcta** — o scheduler compara instantes, não
+texto; o que troca é apenas a ordem de listagem. Corrigir a sério implicava
+guardar tudo em UTC e converter na apresentação, ou seja, migrar o esquema e os
+dados existentes — o que não compensa para o alcance do problema.
+
+A linha do tempo (secção 5.5) não tem este problema: guarda dias
+(`YYYY-MM-DD`), sem hora nem deslocamento, portanto não há nada para trocar.
+
 ### 5.5. Memória em duas camadas
 
 | Camada | Onde vive | Conteúdo |

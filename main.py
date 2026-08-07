@@ -49,6 +49,7 @@ BOT_COMMANDS = [
     BotCommand("agenda", "What's coming up"),
     BotCommand("notes", "Most recent notes"),
     BotCommand("reminders", "Alerts not yet fired"),
+    BotCommand("timeline", "What happened, day by day"),
     BotCommand("forget", "Clear our recent chat"),
     BotCommand("who", "Your id and who has access"),
     BotCommand("help", "How to use the assistant"),

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Optional
 
 import dateparser
@@ -203,6 +203,74 @@ def parse_datetime(text: str, prefer_future: bool = True) -> Optional[datetime]:
                 parsed = parsed.replace(tzinfo=settings.tzinfo)
             return parsed.astimezone(settings.tzinfo)
     return None
+
+
+# Dias da semana nas duas línguas, para reconhecer «last thursday».
+_DIAS_SEMANA = (
+    "monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo"
+)
+
+# «last thursday» e «quinta passada» dizem a mesma coisa que «thursday» num
+# contexto que já prefere o passado — e o dateparser, com `en` e `pt` carregados
+# ao mesmo tempo, devolve None para a forma com qualificador embora entenda a
+# forma sem ele. Tiramos o qualificador, que aqui não acrescenta nada.
+_PASSADO_REDUNDANTE: list[tuple[re.Pattern[str], str]] = [
+    # «last thursday» / «última sexta» -> «thursday» / «sexta»
+    (re.compile(rf"\b(?:last|past|[úu]ltim[oa]|passad[oa])\s+(?=(?:{_DIAS_SEMANA})\b)"), ""),
+    # «quinta passada» -> «quinta» (o português põe o qualificador depois)
+    (re.compile(rf"\b({_DIAS_SEMANA})\s+(?:passad[oa]|[úu]ltim[oa])\b"), r"\1"),
+]
+
+
+def parse_day(text: str) -> Optional[date]:
+    """Interpreta texto que designa um **dia passado**, devolvendo só a data.
+
+    Distinto do `parse_datetime`, e não por capricho: ali «quinta» quer dizer a
+    próxima quinta (marca-se um compromisso para a frente), aqui quer dizer a
+    quinta que passou (conta-se o que já aconteceu). Com a preferência trocada,
+    contar ao domingo uma ida ao dentista «na quinta» arrumava-a quatro dias no
+    futuro.
+
+    Texto vazio significa hoje. Devolve None se não for possível interpretar.
+    """
+    hoje = datetime.now(settings.tzinfo).date()
+    if not text or not text.strip():
+        return hoje
+
+    limpo = _normalise_date_text(text)
+    for padrao, substituto in _PASSADO_REDUNDANTE:
+        limpo = padrao.sub(substituto, limpo)
+    limpo = re.sub(r"\s+", " ", limpo).strip()
+
+    for candidate in (limpo, text.strip()):
+        if not candidate:
+            continue
+        parsed = dateparser.parse(
+            candidate,
+            languages=["en", "pt"],
+            settings={
+                "TIMEZONE": settings.timezone,
+                "TO_TIMEZONE": settings.timezone,
+                "RETURN_AS_TIMEZONE_AWARE": False,
+                "PREFER_DATES_FROM": "past",
+                "DATE_ORDER": "DMY",
+                "RELATIVE_BASE": datetime.now(settings.tzinfo).replace(tzinfo=None),
+            },
+        )
+        if parsed is not None:
+            return parsed.date()
+    return None
+
+
+def format_day(value: date | str) -> str:
+    """Um dia por extenso: `Thursday, 7 August 2026`."""
+    if isinstance(value, str):
+        try:
+            value = date.fromisoformat(value)
+        except ValueError:
+            return str(value)
+    return f"{_WEEKDAYS[value.weekday()]}, {value.day} {_MONTHS[value.month - 1]} {value.year}"
 
 
 def format_datetime(value: datetime | str) -> str:
@@ -433,6 +501,120 @@ def search_notes(ctx: ToolContext, query: str = "") -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Ferramentas 11 e 12 — linha do tempo (o que já aconteceu)
+#
+# A fronteira que interessa manter nítida:
+#   * `add_event`   — vai acontecer, a uma hora marcada, e avisa.
+#   * `save_note`   — um facto sem data («o código do alarme é 4471»).
+#   * `log_moment`  — já aconteceu, num dia, e não avisa ninguém.
+# ---------------------------------------------------------------------------
+def _serialise_moment(moment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": moment["id"],
+        "content": moment["content"],
+        "day": moment["happened_on"],
+    }
+
+
+def log_moment(ctx: ToolContext, content: str, date: str = "") -> dict[str, Any]:  # noqa: A002
+    """Regista um acontecimento passado no dia em que aconteceu."""
+    content = (content or "").strip()
+    if not content:
+        return {"status": "error", "error": "Nothing to record. Ask what happened."}
+
+    dia = parse_day(date)
+    if dia is None:
+        return {
+            "status": "error",
+            "error": f"Could not understand the day {date!r}. Ask for a clearer one.",
+        }
+
+    moment = db.create_moment(ctx.user_id, content, dia)
+    logger.info("Acontecimento #%s registado para o utilizador %s.", moment["id"], ctx.user_id)
+    return {
+        "status": "ok",
+        "moment": {"id": moment["id"], "content": content, "day": format_day(dia)},
+    }
+
+
+def search_timeline(ctx: ToolContext, query: str = "") -> dict[str, Any]:
+    """Consulta a linha do tempo por dia, por período, por palavra ou sem filtro."""
+    query = (query or "").strip()
+
+    if not query:
+        moments = db.list_moments(ctx.user_id)
+        return {
+            "status": "ok",
+            "matched_by": "recent",
+            "count": len(moments),
+            "moments": [_serialise_moment(m) for m in moments],
+        }
+
+    # 1) Períodos que se dizem de uma assentada e que o dateparser não cobre.
+    hoje = datetime.now(settings.tzinfo).date()
+    periodo = _periodo_nomeado(query, hoje)
+    if periodo is not None:
+        inicio, fim = periodo
+        moments = db.get_moments_between(ctx.user_id, inicio, fim)
+        return {
+            "status": "ok",
+            "matched_by": "period",
+            "from": inicio.isoformat(),
+            "to": fim.isoformat(),
+            "count": len(moments),
+            "moments": [_serialise_moment(m) for m in moments],
+        }
+
+    # 2) Um dia concreto.
+    dia = parse_day(query)
+    if dia is not None and _looks_like_date(query):
+        moments = db.get_moments_between(ctx.user_id, dia, dia)
+        return {
+            "status": "ok",
+            "matched_by": "day",
+            "day": dia.isoformat(),
+            "count": len(moments),
+            "moments": [_serialise_moment(m) for m in moments],
+        }
+
+    # 3) Procura no texto.
+    moments = db.search_moments_by_text(ctx.user_id, query)
+    return {
+        "status": "ok",
+        "matched_by": "text",
+        "count": len(moments),
+        "moments": [_serialise_moment(m) for m in moments],
+    }
+
+
+# Períodos com nome próprio. O dateparser devolve um instante, não um
+# intervalo, por isso «semana passada» tem de ser tratado aqui.
+_PERIODOS: list[tuple[str, int]] = [
+    (r"\b(semana passada|last week|esta semana|this week)\b", 7),
+    (r"\b(últimos|ultimos|last)\s+(\d+)\s+(dias|days)\b", 0),  # nº lido do texto
+    (r"\b(mês passado|mes passado|last month|este mês|este mes|this month)\b", 30),
+    (r"\b(este ano|this year|ano passado|last year)\b", 365),
+]
+
+
+def _periodo_nomeado(query: str, hoje: date) -> Optional[tuple[date, date]]:
+    """Converte «semana passada», «últimos 10 dias» e afins num intervalo."""
+    lowered = query.lower()
+    for padrao, dias in _PERIODOS:
+        match = re.search(padrao, lowered)
+        if not match:
+            continue
+        if dias == 0:  # «últimos N dias»
+            try:
+                dias = int(match.group(2))
+            except (IndexError, ValueError):
+                continue
+            dias = max(1, min(dias, 3650))
+        return hoje - timedelta(days=dias), hoje
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Ferramenta 6 — lembrete simples
 # ---------------------------------------------------------------------------
 def set_reminder(ctx: ToolContext, message: str, time: str) -> dict[str, Any]:
@@ -533,13 +715,15 @@ def delete_item(ctx: ToolContext, kind: str, id: int) -> dict[str, Any]:  # noqa
         apagado = db.delete_event(ctx.user_id, item_id)
     elif kind == "note":
         apagado = db.delete_note(ctx.user_id, item_id)
+    elif kind == "moment":
+        apagado = db.delete_moment(ctx.user_id, item_id)
     elif kind == "reminder":
         if not db.reminder_belongs_to(ctx.user_id, item_id):
             return nao_existe
         scheduler.cancel_reminder(item_id)
         apagado = db.delete_reminder(ctx.user_id, item_id)
     else:
-        return {"status": "error", "error": "kind must be event, note or reminder."}
+        return {"status": "error", "error": "kind must be event, note, moment or reminder."}
 
     if not apagado:
         return nao_existe
@@ -768,7 +952,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["event", "note", "reminder"]},
+                    "kind": {"type": "string", "enum": ["event", "note", "moment", "reminder"]},
                     "id": {"type": "integer", "description": "Id from a search result."},
                 },
                 "required": ["kind", "id"],
@@ -791,6 +975,45 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": {"type": "string", "description": "New description. Omit to keep."},
                 },
                 "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_moment",
+            "description": (
+                "Record something that already happened, filed under the day it happened "
+                "('we went to the aquarium', 'Bia went to the dentist'). No alert is sent. "
+                "Use for anything in the past tense; add_event is for what is still to come."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "What happened."},
+                    "date": {
+                        "type": "string",
+                        "description": "Day it happened, e.g. 'yesterday', 'last Thursday'. Empty means today.",
+                    },
+                },
+                "required": ["content", "date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_timeline",
+            "description": (
+                "Look up what happened. Query: a day ('yesterday'), a period "
+                "('last week', 'last 10 days'), a keyword, or empty for the most recent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Day, period or keyword. May be empty."}
+                },
+                "required": ["query"],
             },
         },
     },
@@ -828,6 +1051,8 @@ _REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "list_reminders": list_reminders,
     "delete_item": delete_item,
     "update_event": update_event,
+    "log_moment": log_moment,
+    "search_timeline": search_timeline,
     "set_preference": set_preference,
 }
 

@@ -18,6 +18,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import database as db  # noqa: E402
 import llm  # noqa: E402
+import tools as tools_mod  # noqa: E402
 import main  # noqa: E402
 import scheduler  # noqa: E402
 from tools import ToolContext  # noqa: E402
@@ -90,7 +91,8 @@ check("uma só chamada à API", len(cliente.chat.completions.pedidos) == 1)
 
 pedido = cliente.chat.completions.pedidos[0]
 check("tools enviadas no formato OpenAI",
-      len(pedido["tools"]) == 10 and pedido["tools"][0]["type"] == "function")
+      len(pedido["tools"]) == len(tools_mod.TOOL_SCHEMAS)
+      and pedido["tools"][0]["type"] == "function")
 check("tool_choice=auto", pedido["tool_choice"] == "auto")
 check("prompt de sistema presente", pedido["messages"][0]["role"] == "system")
 check("modelo correcto", pedido["model"] == "deepseek-chat")
@@ -305,7 +307,10 @@ async def cenario():
 rid = asyncio.run(cenario())
 check("scheduler enviou via event loop", len(enviadas) == 1,
       enviadas[0][1].replace("\n", " | ") if enviadas else "nada")
-check("mensagem no chat correcto", enviadas and enviadas[0][0] == 77)
+# Entregue ao utilizador (7), não ao `chat_id` gravado (77): em privado são o
+# mesmo número, e assim um registo antigo criado num grupo não volta para lá.
+check("mensagem entregue ao utilizador", enviadas and enviadas[0][0] == 7,
+      f"foi para {enviadas[0][0] if enviadas else 'lado nenhum'}")
 check("lembrete marcado como disparado", db.get_reminder(rid)["fired"] == 1)
 
 scheduler.shutdown(wait=True)

@@ -56,10 +56,11 @@ BTN_TODAY = "📅 Today"
 BTN_AGENDA = "🗓️ Agenda"
 BTN_NOTES = "📝 Notes"
 BTN_REMINDERS = "⏰ Reminders"
+BTN_TIMELINE = "📖 Timeline"
 BTN_HELP = "❓ Help"
 
 MENU = ReplyKeyboardMarkup(
-    [[BTN_TODAY, BTN_AGENDA], [BTN_NOTES, BTN_REMINDERS], [BTN_HELP]],
+    [[BTN_TODAY, BTN_AGENDA], [BTN_NOTES, BTN_REMINDERS], [BTN_TIMELINE, BTN_HELP]],
     resize_keyboard=True,
     is_persistent=True,
     input_field_placeholder="Tell me anything…",
@@ -71,7 +72,8 @@ WELCOME = (
     "🗓️ *Diary* — “dentist on Thursday at 3pm” (I'll alert you 15 min before)\n"
     "⏰ *Reminders* — “remind me to take the pill at 9”\n"
     "📝 *Notes* — “remember the office wifi is Torre2024”\n"
-    "🔎 *Lookups* — “what's on today?”, “what do you know about the car?”\n\n"
+    "📖 *Timeline* — “we went to the aquarium today” (filed by day, no alert)\n"
+    "🔎 *Lookups* — “what's on today?”, “what happened last week?”\n\n"
     "The buttons below are instant lookups — and they cost nothing to run."
 )
 
@@ -81,12 +83,18 @@ HELP = (
     "• “lunch with Ana tomorrow at 1pm” → saved to the diary + alert\n"
     "• “remind me to call the garage at 5” → one-off alert\n"
     "• “note: the alarm code is 4471” → saved\n"
-    "• “what's on Friday?” → looked up\n\n"
+    "• “we went to the aquarium yesterday” → filed on the timeline\n"
+    "• “what's on Friday?” / “what happened last week?” → looked up\n\n"
+    "*Timeline*\n"
+    "Small things as they happen, filed under the day. Tell me in the past tense "
+    "and I'll record it without setting any alert — then ask “what happened "
+    "yesterday?” or tap 📖 to read it back.\n\n"
     "*Buttons and commands*\n"
     "📅 /today — today's appointments\n"
     "🗓️ /agenda — what's coming up\n"
     "📝 /notes — most recent notes\n"
     "⏰ /reminders — alerts not yet fired\n"
+    "📖 /timeline — what happened, day by day\n"
     "🧹 /forget — clear our recent chat from my short-term memory\n"
     "🪪 /who — your Telegram id and who else has access\n"
     "❓ /help — this message\n\n"
@@ -353,6 +361,32 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await send_text(context.bot, ctx.chat_id, "\n".join(linhas))
 
 
+async def cmd_timeline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mostra os últimos acontecimentos registados, agrupados por dia."""
+    ctx = _context_from(update)
+    moments = db.list_moments(ctx.user_id, limit=30)
+
+    if not moments:
+        await send_text(
+            context.bot,
+            ctx.chat_id,
+            "Nothing on the timeline yet. 📖\n"
+            "_Just tell me things as they happen — “we went to the aquarium”, "
+            "“Bia went to the dentist” — and I'll file them under the day._",
+        )
+        return
+
+    linhas = ["📖 *Timeline*"]
+    dia_actual = None
+    for moment in moments:
+        if moment["happened_on"] != dia_actual:
+            dia_actual = moment["happened_on"]
+            linhas.append(f"\n*{tools.format_day(dia_actual)}*")
+        linhas.append(f"• {moment['content']}")
+
+    await send_text(context.bot, ctx.chat_id, "\n".join(linhas))
+
+
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Arruma e limpa a memória de curto prazo.
 
@@ -540,6 +574,7 @@ _BUTTON_ROUTES = {
     BTN_AGENDA: cmd_agenda,
     BTN_NOTES: cmd_notes,
     BTN_REMINDERS: cmd_reminders,
+    BTN_TIMELINE: cmd_timeline,
     BTN_HELP: cmd_help,
 }
 
@@ -647,6 +682,7 @@ def register_handlers(application: Application) -> None:
         ("agenda", cmd_agenda),
         (["notes", "notas"], cmd_notes),
         (["reminders", "lembretes"], cmd_reminders),
+        (["timeline", "linha"], cmd_timeline),
         (["forget", "esquecer"], cmd_forget),
         (["who", "whoami", "quem"], cmd_who),
         ("allow", cmd_allow),
