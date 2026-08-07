@@ -80,3 +80,40 @@ def limpar_nome(nome: object, limite: int = MAX_NOME) -> str:
 def limitar(texto: object, limite: int) -> str:
     """Corta um texto ao comprimento pedido, sem outras alterações."""
     return str(texto or "").strip()[:limite]
+
+
+# ---------------------------------------------------------------------------
+# Sintaxe interna de chamadas a ferramentas
+#
+# Quando o modelo quer uma ferramenta que não existe, não consegue emitir uma
+# chamada a sério — e às vezes escreve a sintaxe da chamada como se fosse
+# texto normal. O utilizador via um bloco de `<|DSML|...invoke name="...">` no
+# meio da conversa.
+#
+# A causa é sempre uma ferramenta em falta, e é aí que se corrige. Isto é a
+# rede por baixo: se voltar a acontecer com outra ferramenta imaginada, o lixo
+# não chega ao ecrã.
+# ---------------------------------------------------------------------------
+_MARKUP = [
+    # Blocos completos de chamada, com abertura e fecho.
+    re.compile(r"<\s*\|*\s*(?:DSML|antml)[^>]*>.*?<\s*/\s*\|*\s*(?:DSML|antml)[^>]*(?:tool_?calls|invoke)\s*\|*\s*>",
+               re.DOTALL | re.IGNORECASE),
+    # Restos soltos: etiquetas isoladas que sobrem de um bloco truncado.
+    re.compile(r"<\s*/?\s*\|*\s*(?:DSML|antml)[^>]*>", re.IGNORECASE),
+    re.compile(r"</?\s*(?:tool_?calls|invoke|parameter)\b[^>]*>", re.IGNORECASE),
+]
+
+
+def tem_markup_de_ferramenta(texto: str) -> bool:
+    """True se o texto contiver sintaxe interna de chamada a ferramentas."""
+    return any(padrao.search(texto) for padrao in _MARKUP)
+
+
+def limpar_markup_de_ferramenta(texto: str) -> str:
+    """Retira do texto a sintaxe interna de chamadas a ferramentas."""
+    limpo = texto
+    for padrao in _MARKUP:
+        limpo = padrao.sub("", limpo)
+    # Sobram linhas vazias onde estava o bloco.
+    limpo = re.sub(r"\n{3,}", "\n\n", limpo)
+    return limpo.strip()

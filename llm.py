@@ -139,7 +139,14 @@ STYLE
 
 TOOLS
 - Call get_current_datetime before reasoning about today, tomorrow or this week.
-- Never invent events, notes or reminders. If a tool did not return it, it does not exist.
+- Never invent events, notes, reminders or timeline entries. If a tool did not return it,
+  it does not exist.
+- Never claim you changed, saved, corrected or deleted anything unless a tool call returned
+  status "ok" for it in this very turn. Rewriting something in your reply is not saving it.
+  If you have no tool for what they asked, say so plainly instead — do not describe a tool
+  call, do not write out its syntax, and never invent a tool name.
+- To correct a timeline entry, search_timeline for its id and then update_moment. To split
+  one entry into several, update the first and log_moment the rest.
 - Past tense means log_moment. If they are telling you something that already happened —
   an outing, a visit, news about someone, something they watched, read, learnt or were
   told — file it on the timeline and do not set an alert. Record it even when it seems
@@ -278,6 +285,21 @@ def generate_reply(ctx: ToolContext, user_message: str) -> str:
         logger.warning("Limite de rondas de ferramentas atingido (utilizador %s).", ctx.user_id)
         response = _chat_completion(messages, with_tools=False)
         reply_text = (response.choices[0].message.content or "").strip()
+
+    # O modelo pode escrever a sintaxe de uma chamada a ferramenta como texto,
+    # quando quer uma que não existe. Nunca deve chegar ao utilizador.
+    if safety.tem_markup_de_ferramenta(reply_text):
+        logger.warning(
+            "A resposta ao utilizador %s trazia sintaxe de chamada a ferramenta; retirada. "
+            "Costuma ser sinal de que falta uma ferramenta para o que foi pedido.",
+            ctx.user_id,
+        )
+        reply_text = safety.limpar_markup_de_ferramenta(reply_text)
+        if not reply_text:
+            reply_text = (
+                "I tried to do that but I don't have a way to. Could you tell me "
+                "in another way what you'd like changed?"
+            )
 
     if not reply_text:
         reply_text = "Sorry, I could not put an answer together. Could you rephrase that?"
