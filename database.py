@@ -488,6 +488,40 @@ def search_moments_by_text(user_id: int, text: str, limit: int = 30) -> list[dic
         return [_row_to_dict(row) for row in cur.fetchall()]
 
 
+def update_moment(
+    user_id: int,
+    moment_id: int,
+    content: Optional[str] = None,
+    happened_on: Optional[date] = None,
+) -> bool:
+    """Corrige o texto e/ou o dia de um acontecimento. True se algo mudou."""
+    campos: list[str] = []
+    valores: list[Any] = []
+    if content is not None:
+        campos.append("content = ?")
+        valores.append(content.strip())
+    if happened_on is not None:
+        campos.append("happened_on = ?")
+        valores.append(happened_on.isoformat())
+    if not campos:
+        return False
+
+    valores.extend([moment_id, user_id])
+    with _cursor() as cur:
+        cur.execute(
+            f"UPDATE moments SET {', '.join(campos)} WHERE id = ? AND user_id = ?",
+            valores,
+        )
+        return cur.rowcount > 0
+
+
+def moment_belongs_to(user_id: int, moment_id: int) -> bool:
+    """True se o acontecimento existir e for mesmo desta pessoa."""
+    with _cursor() as cur:
+        cur.execute("SELECT 1 FROM moments WHERE id = ? AND user_id = ?", (moment_id, user_id))
+        return cur.fetchone() is not None
+
+
 def delete_moment(user_id: int, moment_id: int) -> bool:
     with _cursor() as cur:
         cur.execute("DELETE FROM moments WHERE id = ? AND user_id = ?", (moment_id, user_id))

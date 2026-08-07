@@ -116,6 +116,56 @@ check("nem a consegue apagar",
 check("o acontecimento continua lá", db.get_moments_between(
     ctx.user_id, HOJE - timedelta(days=1), HOJE - timedelta(days=1)) != [])
 
+# --- corrigir uma entrada ---------------------------------------------------
+# Sem isto, um pedido de correcção não tinha ferramenta que o servisse: o
+# modelo inventava uma («update_timeline») e despejava a sintaxe da chamada
+# em texto na conversa, enquanto jurava que tinha corrigido.
+alvo = tools.execute_tool(
+    "log_moment", {"content": "disparar na pressa onde ar", "date": ""}, ctx)["moment"]["id"]
+
+r = tools.execute_tool(
+    "update_moment", {"id": alvo, "content": "disparar na carabina de pressão de ar"}, ctx)
+check("corrige o texto de uma entrada", r["status"] == "ok", str(r))
+check("o texto novo ficou mesmo gravado",
+      any(m["content"] == "disparar na carabina de pressão de ar"
+          for m in db.list_moments(ctx.user_id)))
+check("o texto antigo desapareceu",
+      not any(m["content"] == "disparar na pressa onde ar" for m in db.list_moments(ctx.user_id)))
+
+r = tools.execute_tool("update_moment", {"id": alvo, "date": "ontem"}, ctx)
+check("corrige o dia de uma entrada", r["status"] == "ok", str(r))
+check("mudou mesmo de dia",
+      any(m["id"] == alvo and m["happened_on"] == (HOJE - timedelta(days=1)).isoformat()
+          for m in db.list_moments(ctx.user_id)))
+
+check("corrigir sem dizer o quê dá erro",
+      tools.execute_tool("update_moment", {"id": alvo}, ctx)["status"] == "error")
+check("corrigir uma entrada inexistente dá erro",
+      tools.execute_tool("update_moment", {"id": 9999, "content": "x"}, ctx)["status"] == "error")
+check("outra pessoa não corrige a entrada alheia",
+      tools.execute_tool("update_moment", {"id": alvo, "content": "invadido"}, OUTRO)["status"]
+      == "error")
+check("e o texto ficou intacto",
+      not any(m["content"] == "invadido" for m in db.list_moments(ctx.user_id)))
+tools.execute_tool("delete_item", {"kind": "moment", "id": alvo}, ctx)
+
+# --- sintaxe interna nunca chega ao utilizador ------------------------------
+import safety  # noqa: E402
+
+fuga = ('Vou corrigir isso.\n\n<|DSML|tool_calls>\n<|DSML|invoke name="update_timeline">\n'
+        '<|DSML|parameter name="id" string="false">1</|DSML|parameter>\n'
+        '</|DSML|invoke>\n</|DSML|tool_calls>')
+check("deteta sintaxe de chamada a ferramenta", safety.tem_markup_de_ferramenta(fuga))
+limpo = safety.limpar_markup_de_ferramenta(fuga)
+check("retira-a toda", not safety.tem_markup_de_ferramenta(limpo), limpo)
+check("mas guarda o texto útil", limpo == "Vou corrigir isso.", repr(limpo))
+for normal in ["Logged ✅ — almoço em casa da Beatriz.",
+               "1 < 2 e 3 > 2, tudo bem.",
+               "Queres que atualize a timeline?"]:
+    check(f"texto normal intacto: {normal[:28]}…",
+          safety.limpar_markup_de_ferramenta(normal) == normal
+          and not safety.tem_markup_de_ferramenta(normal))
+
 # --- apagar -----------------------------------------------------------------
 r = tools.execute_tool("delete_item", {"kind": "moment", "id": ontem_id}, ctx)
 check("o dono apaga o seu acontecimento", r["status"] == "ok", str(r))

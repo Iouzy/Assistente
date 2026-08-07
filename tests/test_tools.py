@@ -260,7 +260,7 @@ nomes = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
 esperados = {"get_current_datetime", "add_event", "search_events", "save_note",
              "search_notes", "set_reminder", "list_reminders",
              "delete_item", "update_event", "set_preference",
-             "log_moment", "search_timeline"}
+             "log_moment", "update_moment", "search_timeline"}
 check("esquemas completos", nomes == esperados, ", ".join(sorted(nomes)))
 check("esquemas registados no dispatcher", nomes == set(tools._REGISTRY))
 
