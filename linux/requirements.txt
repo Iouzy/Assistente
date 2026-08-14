@@ -1,0 +1,8 @@
+# Só o painel de controlo precisa disto — não o bot. As dependências do bot
+# (python-telegram-bot, openai, etc.) continuam no requirements.txt da raiz,
+# para uma instalação em servidor (systemd, sem interface) não puxar uma
+# biblioteca de interface que nunca vai usar.
+
+# Servidor web local que desenha o painel — Material Design pronto a usar,
+# sem escrever HTML/CSS/JS.
+nicegui>=2.18.0,<4.0.0

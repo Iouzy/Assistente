@@ -436,7 +436,7 @@ _main.STOP_FILE.unlink(missing_ok=True)
 # --- permissões dadas por fora (painel de controlo) -------------------------
 # O painel escreve na tabela `access` a partir de outro processo; o bot tem de
 # apanhar a alteração sozinho, sem ser reiniciado.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "windows"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import acessos  # noqa: E402
 
 
