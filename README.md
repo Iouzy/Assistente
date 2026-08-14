@@ -570,13 +570,19 @@ chamada internamente.
 
 A DeepSeek cobra **por token** (≈ 4 caracteres), com preços diferentes para
 entrada e saída — e um desconto grande para **cache hits**, que é exatamente o
-que a estrutura do prompt (secção 5.2) procura maximizar.
+que a estrutura do prompt (secção 5.2) procura maximizar. Desde a atualização
+para o **DeepSeek-V4** (16 de agosto de 2026), o preço também depende do
+horário: as **peak hours** (01:00–04:00 e 06:00–10:00 UTC) custam o dobro do
+off-peak.
 
-| Tipo | Preço aproximado |
-|---|---|
-| Entrada (cache miss) | ~$0,28 / M tokens |
-| Entrada (**cache hit**) | ~$0,03 / M tokens |
-| Saída | ~$0,42 / M tokens |
+`deepseek-chat` (o modelo usado por este projeto, ver `DEEPSEEK_MODEL` em
+`config.py`) corresponde ao tier **V4-Flash**:
+
+| Tipo | Off-peak | Peak (01–04h e 06–10h UTC) |
+|---|---|---|
+| Entrada (cache miss) | $0,22 / M tokens | $0,44 / M tokens |
+| Entrada (**cache hit**) | $0,007 / M tokens | $0,014 / M tokens |
+| Saída | $0,66 / M tokens | $1,32 / M tokens |
 
 > ⚠️ Confirma os valores atuais em
 > <https://api-docs.deepseek.com/quick_start/pricing> — a DeepSeek já ajustou
@@ -596,15 +602,19 @@ que a estrutura do prompt (secção 5.2) procura maximizar.
 
 15 mensagens/dia (≈450/mês), ~1,6 chamadas por mensagem, ~150 tokens de saída:
 
-| Item | Custo/mês |
-|---|---|
-| Entrada em cache (~1 385 × 720 chamadas) | ~$0,03 |
-| Entrada sem cache | ~$0,08 |
-| Saída | ~$0,03 |
-| Resumos de memória | <$0,01 |
-| **Total** | **≈ $0,15 ≈ €0,14** |
+| Item | Custo/mês (off-peak) | Custo/mês (peak) |
+|---|---|---|
+| Entrada em cache (~1 385 × 720 chamadas) | ~$0,01 | ~$0,01 |
+| Entrada sem cache | ~$0,06 | ~$0,12 |
+| Saída | ~$0,07 | ~$0,14 |
+| Resumos de memória | ~$0,01 | ~$0,02 |
+| **Total** | **≈ $0,15 ≈ €0,14** | **≈ $0,30 ≈ €0,27** |
 
-Antes das otimizações eram ~€0,38. **Um carregamento de 5 € dura anos.**
+A saída ficou ~57% mais cara com o V4, mas o cache hit ficou ~75% mais barato
+— para este projeto, que maximiza cache hits de propósito, os dois efeitos
+quase se anulam. **A mudança de preço não é significativa na prática**: o
+total mensal off-peak mantém-se em ~€0,14, igual a antes do V4. Antes das
+otimizações do prompt eram ~€0,38. **Um carregamento de 5 € dura anos.**
 
 ### 7.4. E se usar muito mais?
 
@@ -614,6 +624,9 @@ Antes das otimizações eram ~€0,38. **Um carregamento de 5 € dura anos.**
 | 15 | ~€0,14 |
 | 30 | ~€0,28 |
 | 150 | ~€1,40 |
+
+Valores para uso off-peak; se as chamadas caírem sobretudo em peak hours
+(01–04h e 06–10h UTC), o custo duplica aproximadamente.
 
 Como reduzir ainda mais:
 
