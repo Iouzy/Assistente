@@ -79,7 +79,8 @@ Um menu fixo por cima da caixa de texto com as consultas mais frequentes.
 - **Fechado por omissão:** o bot só responde a ids autorizados de propósito.
   A quem não estiver autorizado não responde *nada* — nem sequer uma recusa.
 - **Ninguém fica dono por escrever primeiro.** O primeiro id é acrescentado por
-  si, no painel do Windows (botão «Utilizadores») ou em `ALLOWED_USER_IDS`.
+  si, no painel de controlo (botão «Utilizadores», Windows ou Linux) ou em
+  `ALLOWED_USER_IDS`.
 - **Partilha por comando, só pelo dono:** `/allow <id>` e `/revoke <id>`, sem
   editar ficheiros nem reiniciar — dá para modo família. Quem foi convidado
   usa o bot, mas não pode convidar mais ninguém.
@@ -184,10 +185,10 @@ Há duas maneiras de gerir a lista, e é o `ALLOWED_USER_IDS` que decide qual.
 
 #### Modo base de dados (`ALLOWED_USER_IDS` vazio)
 
-Autoriza-te a ti primeiro, pelo painel do Windows — botão **👥 Utilizadores**
-(secção 3.7): escreve o teu id, dá-lhe um nome e carrega em **Adicionar**. O
-primeiro id da lista fica **dono**. (Para saberes o teu id, manda uma mensagem
-ao @userinfobot.)
+Autoriza-te a ti primeiro, pelo painel de controlo — botão **👥 Utilizadores**
+(Windows: secção 3.7; Linux: secção 3.8): escreve o teu id, dá-lhe um nome e
+carrega em **Adicionar**. O primeiro id da lista fica **dono**. (Para saberes
+o teu id, manda uma mensagem ao @userinfobot.)
 
 Daí em diante geres tudo pelo Telegram:
 
@@ -342,7 +343,52 @@ Sem janela não há registos no ecrã, por isso o `.vbs` define `LOG_FILE` para
 Para não suspender: **Definições → Sistema → Energia → Suspender: Nunca**, e
 **Painel de Controlo → Opções de Energia → ao fechar a tampa: Não fazer nada**.
 
-### 3.8. Deixar a correr sempre num servidor Linux (opcional)
+### 3.8. Correr no Ubuntu (painel de controlo)
+
+Equivalente ao painel do Windows (secção 3.7), mas como página web servida em
+`localhost` — não precisa de Tkinter nem de nada específico do Windows.
+
+**Instalação, uma vez:**
+
+```bash
+git clone <o-teu-fork-ou-repositório> Assistente
+cd Assistente
+bash linux/instalar.sh
+```
+
+Isto cria o ambiente virtual, instala as dependências do bot e do painel, e
+regista um atalho **"Assistente — Painel de Controlo"** no menu de
+aplicações. Não cria o `.env` nem pede credenciais — isso faz-se dentro do
+próprio painel, a seguir.
+
+**A partir daí, é só abrir o atalho** (menu de aplicações, ou copiado para o
+Ambiente de Trabalho — o `instalar.sh` diz o caminho exacto). Abre o
+`linux/painel.py`, que arranca um servidor local e abre-o sozinho numa aba do
+navegador. Não é preciso terminal nem escrever `python` nenhum depois deste
+primeiro passo.
+
+O painel tem três abas:
+
+- **Consola** — os botões **Ligar**/**Parar** (o mesmo encerramento ordenado
+  do painel do Windows, pelo ficheiro `.stop-assistente`) e a saída do bot ao
+  vivo.
+- **Utilizadores** — a mesma gestão de acesso da secção 3.4.1: dar e retirar
+  permissões, passar a coroa de dono. Pode fazer-se com o bot ligado.
+- **Credenciais** — onde entram o `TELEGRAM_TOKEN` e a `DEEPSEEK_API_KEY`.
+  Escreve-os aqui e o painel grava-os no `.env` (criado na hora, a partir do
+  `.env.example`, se ainda não existir) — não há ficheiro nenhum para copiar
+  à mão de outro sistema. Se já tiveres as chaves noutra instalação (por
+  exemplo, num Windows do mesmo computador em arranque duplo), também podes
+  simplesmente copiar o `.env` de lá para aqui em vez de as voltar a escrever.
+
+**Actualização:** o botão **Actualizar agora** faz o mesmo que o do Windows
+(`git pull`, reinstala dependências se mudaram). O painel do Linux acrescenta
+uma verificação automática a cada 6 horas, sem precisar de clicar em nada —
+só corre com o assistente desligado, para não mexer no código a meio de uma
+execução. Se a actualização tocar no próprio painel, fica um aviso na consola
+a pedir para o reabrir.
+
+### 3.9. Deixar a correr sempre num servidor Linux (opcional)
 
 `/etc/systemd/system/assistente.service`:
 
@@ -519,8 +565,9 @@ desaparecia ao desligar o bot.
 | `database.py` | Esquema SQLite e CRUD thread-safe |
 | `scheduler.py` | Agendamento, disparo e restauro de lembretes |
 | `config.py` | Variáveis de ambiente, validadas no arranque |
-| `windows/painel.pyw` | Painel de controlo (tkinter): processo, consola, utilizadores |
-| `windows/acessos.py` | Lista de acesso vista do painel — só biblioteca-padrão |
+| `acessos.py` | Lista de acesso e credenciais vistas do painel — só biblioteca-padrão |
+| `windows/painel.pyw` | Painel de controlo do Windows (tkinter): processo, consola, utilizadores |
+| `linux/painel.py` | Painel de controlo do Linux (NiceGUI): processo, consola, utilizadores, credenciais, auto-actualização |
 
 ### 5.7. Ferramentas expostas ao modelo
 

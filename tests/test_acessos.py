@@ -1,4 +1,4 @@
-"""Testa a gestão de permissões usada pelo painel de controlo do Windows.
+"""Testa a gestão de permissões usada pelos painéis de controlo (Windows e Linux).
 
 Não abre janela nenhuma: o `acessos.py` é só biblioteca-padrão (sqlite3 e
 ficheiros), por isso corre em qualquer sistema.
@@ -16,7 +16,7 @@ import tempfile
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "windows"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import acessos  # noqa: E402
 

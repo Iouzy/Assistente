@@ -1,7 +1,9 @@
-"""Gestão da lista de acesso — a parte que não é interface.
+"""Gestão da lista de acesso e das credenciais — a parte que não é interface.
 
-O painel de controlo usa isto para atribuir e retirar permissões sem ser
-preciso passar pelo Telegram (`/allow`, `/revoke`).
+Os painéis de controlo (Windows e Linux) usam isto para atribuir e retirar
+permissões sem ser preciso passar pelo Telegram (`/allow`, `/revoke`), e para
+escrever o `TELEGRAM_TOKEN` e a `DEEPSEEK_API_KEY` no `.env` sem o utilizador
+ter de o editar à mão.
 
 Só usa a biblioteca-padrão, de propósito: o painel abre mesmo que o ambiente
 virtual não esteja criado, e **não** importa o `config.py` — se o fizesse,
@@ -22,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-RAIZ = Path(__file__).resolve().parent.parent
+RAIZ = Path(__file__).resolve().parent
 ENV_FILE = RAIZ / ".env"
 
 # Mesma definição que está no `database.py`; repetida aqui para o painel poder
@@ -109,6 +111,64 @@ def lista_fixa(env: dict[str, str] | None = None) -> tuple[list[int], str]:
     if do_ficheiro:
         return ler_ids(do_ficheiro), "ficheiro .env"
     return [], ""
+
+
+def garantir_env(caminho: Path | str = ENV_FILE, exemplo: Path | str | None = None) -> bool:
+    """Cria o `.env` se faltar, a partir do `.env.example`. Devolve True se criou.
+
+    Sem isto, escrever uma chave num `.env` inexistente perdia todos os
+    comentários e valores por omissão que o `.env.example` documenta.
+    """
+    caminho = Path(caminho)
+    if caminho.exists():
+        return False
+
+    exemplo = Path(exemplo) if exemplo is not None else caminho.with_name(".env.example")
+    conteudo = exemplo.read_text(encoding="utf-8") if exemplo.exists() else ""
+    with open(os.open(caminho, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w", encoding="utf-8") as ficheiro:
+        ficheiro.write(conteudo)
+    return True
+
+
+def definir_variaveis(valores: dict[str, str], caminho: Path | str = ENV_FILE) -> None:
+    """Escreve uma ou mais variáveis no `.env`, sem tocar no resto do ficheiro.
+
+    Substitui a linha existente (preservando `export `, se lá estiver);
+    acrescenta-a ao fim se a variável ainda não constar do ficheiro. Cria o
+    `.env` primeiro (a partir do `.env.example`) se ele ainda não existir —
+    é assim que as credenciais podem ser preenchidas antes de qualquer outra
+    configuração manual.
+    """
+    caminho = Path(caminho)
+    garantir_env(caminho)
+
+    with open(caminho, encoding="utf-8", newline="") as ficheiro:
+        linhas = ficheiro.readlines()
+
+    por_escrever = dict(valores)
+    novas: list[str] = []
+    for linha in linhas:
+        chave, sep, resto = linha.partition("=")
+        nome = chave.strip().removeprefix("export ").strip()
+        if sep and nome in por_escrever:
+            prefixo = "export " if chave.strip().startswith("export ") else ""
+            fim = "\r\n" if linha.endswith("\r\n") else ("\n" if linha.endswith("\n") else "")
+            novas.append(f"{prefixo}{nome}={por_escrever.pop(nome)}{fim}")
+        else:
+            novas.append(linha)
+
+    if por_escrever:
+        if novas and not novas[-1].endswith(("\n", "\r\n")):
+            novas.append("\n")
+        for nome, valor in por_escrever.items():
+            novas.append(f"{nome}={valor}\n")
+
+    try:
+        with open(caminho, "w", encoding="utf-8", newline="") as ficheiro:
+            ficheiro.writelines(novas)
+        os.chmod(caminho, 0o600)
+    except OSError as exc:
+        raise ErroAcesso(f"Não consegui escrever no {caminho.name}: {exc}") from exc
 
 
 def esvaziar_lista_fixa(caminho: Path | str = ENV_FILE) -> list[int]:

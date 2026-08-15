@@ -27,7 +27,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import acessos  # noqa: E402  (o caminho tem de ser preparado antes)
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -254,7 +254,7 @@ class Painel:
 
             # O painel corre a partir do código que carregou no arranque: se ele
             # próprio mudou, é preciso reabri-lo para a alteração valer.
-            if any(f.startswith(("windows/painel", "windows/acessos")) for f in alterados):
+            if any(f.startswith(("windows/painel", "acessos.py")) for f in alterados):
                 self.root.after(0, self._propor_reinicio)
             else:
                 self.linhas.put("Pronto. Ligue o assistente outra vez.\n")
