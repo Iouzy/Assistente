@@ -58,6 +58,10 @@ Ao contrário de um simples *chatbot*, o assistente:
 - **Sobrevivem a reinícios**: no arranque são reagendados a partir da base de dados.
 - Os que expiraram com o bot offline são entregues à mesma (dentro de uma janela
   de tolerância) com aviso de atraso.
+- **Nenhum desaparece em silêncio**: os que ficaram para trás dessa janela são
+  comunicados numa lista — «2 avisos não chegaram a horas» — em vez de apagados.
+- A base de dados é comparada com os avisos agendados de 5 em 5 minutos, para
+  apanhar os que se perderiam com a máquina suspensa (ver secção 5.3).
 
 ### Notas e preferências
 - Guarda qualquer informação com data/hora e procura por texto.
@@ -492,6 +496,35 @@ silêncio.
 
 A **base de dados é a fonte de verdade**, não o scheduler: cada lembrete é
 gravado primeiro e só depois agendado; no arranque os jobs são reconstruídos.
+
+#### 5.3.1. Porque é que a reconciliação corre de 5 em 5 minutos
+
+Esse princípio só era aplicado **no arranque**, e isso abria dois buracos numa
+máquina que suspende — que é precisamente onde isto corre:
+
+* O APScheduler **descarta** um job cuja hora passou há mais do que o
+  `misfire_grace_time` (5 minutos). Como um lembrete é um `DateTrigger`, o job
+  morre aí: o `fired` ficava a `0` na base de dados e o aviso **nunca mais
+  disparava**, com o bot a correr e convencido de que estava tudo bem. Fechar a
+  tampa do portátil dez minutos chegava para isto acontecer.
+* Um lembrete fora da janela de tolerância era marcado como disparado **sem
+  nunca ter sido enviado**. Ficava uma linha no registo e mais nada — quem o
+  criou nunca sabia que tinha existido.
+
+Por isso `reconcile_reminders()` corre também a cada `RECONCILE_MINUTES`:
+compara os pendentes da base de dados com os jobs vivos e repõe o que falta.
+Quem já tem job vivo não é tocado — reagendar a cada passagem reiniciaria a
+contagem e o aviso nunca chegaria a disparar.
+
+O que ficou para trás da janela de tolerância é **comunicado**, agrupado numa
+mensagem por pessoa, em vez de apagado. Perder um aviso porque o computador
+estava desligado é aceitável; perdê-lo sem o dizer não é.
+
+> O envio desse resumo é feito por um job com dez segundos de atraso, e não
+> directamente. No arranque, a reconciliação é chamada de dentro do event loop
+> (o `post_init`), e o notificador faz `run_coroutine_threadsafe` seguido de
+> `future.result()` — chamá-lo a partir do próprio loop bloquearia à espera de
+> si mesmo.
 
 ### 5.4. Concorrência na base de dados
 
