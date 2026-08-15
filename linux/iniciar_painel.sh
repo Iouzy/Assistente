@@ -25,4 +25,4 @@ if [ ! -x .venv/bin/python ]; then
     exit 1
 fi
 
-exec .venv/bin/python linux/painel.py
+exec .venv/bin/python painel.py

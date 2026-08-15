@@ -166,8 +166,51 @@ time.sleep(12)
 textos = " ".join(t for _, t in recebidas)
 check("lembrete atrasado recuperado", "Atrasado" in textos)
 check("aviso de atraso incluído", "atrasado" in textos.lower())
-check("lembrete muito antigo descartado",
-      db.get_reminder(antigo_id)["fired"] == 1 and "Muito antigo" not in textos)
+# Fora da janela de tolerância não se dispara como se fosse a horas — mas
+# também não se apaga em silêncio, que era o que acontecia antes: o registo
+# era marcado como enviado sem nunca ter sido, e o utilizador nunca sabia
+# que aquele aviso tinha existido.
+check("lembrete muito antigo não dispara como se fosse a horas",
+      db.get_reminder(antigo_id)["fired"] == 1)
+check("mas o utilizador é avisado de que falhou",
+      "Muito antigo" in textos and "não chegou a horas" in textos,
+      textos.replace("\n", " | ") or "nada recebido")
+
+# --- reconciliação com o bot a correr --------------------------------------
+# O APScheduler descarta um job cuja hora passou há mais do que o
+# `misfire_grace_time` — é o que acontece quando a máquina esteve suspensa.
+# Como é um DateTrigger, o job morre aí: sem reconciliação periódica o
+# lembrete ficava `fired = 0` para sempre e nunca mais disparava, com o bot a
+# correr e convencido de que estava tudo bem.
+recebidas.clear()
+sem_job_id = db.create_reminder(42, 99, "Job descartado",
+                                datetime.now(settings.tzinfo) - timedelta(minutes=1))
+check("o lembrete está pendente e sem job",
+      db.get_reminder(sem_job_id)["fired"] == 0 and not scheduler.cancel_reminder(sem_job_id))
+
+scheduler.reconcile_reminders()
+time.sleep(12)
+check("a reconciliação recupera um lembrete sem job",
+      any("Job descartado" in t for _, t in recebidas),
+      f"{len(recebidas)} mensagem(ns) recebida(s)")
+
+# Um lembrete futuro que tenha perdido o job também tem de ser reposto.
+futuro_id = db.create_reminder(42, 99, "Futuro sem job",
+                               datetime.now(settings.tzinfo) + timedelta(hours=2))
+scheduler.reconcile_reminders()
+check("a reconciliação reagenda um lembrete futuro sem job",
+      scheduler.cancel_reminder(futuro_id))  # True = havia job (e fica limpo)
+
+# Quem já tem job vivo não pode ser tocado: reagendar a cada passagem
+# reiniciaria a contagem e o lembrete nunca chegaria a disparar.
+vivo_id = db.create_reminder(42, 99, "Com job vivo",
+                             datetime.now(settings.tzinfo) + timedelta(hours=3))
+scheduler.schedule_reminder(vivo_id, datetime.now(settings.tzinfo) + timedelta(hours=3))
+antes = scheduler._scheduler.get_job(scheduler._job_id(vivo_id)).next_run_time
+scheduler.reconcile_reminders()
+depois = scheduler._scheduler.get_job(scheduler._job_id(vivo_id)).next_run_time
+check("a reconciliação não mexe em quem já tem job", antes == depois)
+scheduler.cancel_reminder(vivo_id)
 
 # --- memória ----------------------------------------------------------------
 db.save_summary(42, "O utilizador chama-se Miguel e trabalha em Aveiro.")

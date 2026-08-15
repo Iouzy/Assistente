@@ -68,7 +68,10 @@ rem_id = r["reminder"]["id"]
 e = tools.add_event(VITIMA, date="in 3 hours", description="cirurgia")
 ev_id = e["event"]["id"]
 
-jobs = lambda: {j.id for j in scheduler._scheduler.get_jobs()}  # noqa: E731
+# Só os jobs de lembretes: o scheduler tem também os seus próprios jobs de
+# manutenção (a reconciliação periódica), que não são o que aqui se mede.
+jobs = lambda: {j.id for j in scheduler._scheduler.get_jobs()  # noqa: E731
+                if j.id.startswith("reminder-")}
 jobs_antes = jobs()
 check("vítima tem os dois jobs agendados", len(jobs_antes) == 2, str(jobs_antes))
 
