@@ -13,27 +13,37 @@ que já custaram uma descoberta cada.
 
 | | |
 |---|---|
-| Branch de trabalho | `claude/feedback-improvements-jpq1hm` |
-| Branch base | `claude/telegram-assistant-bot-gc3k0b` (é o tronco deste repositório, não o `main`) |
 | Repositório | `Iouzy/Assistente` |
+| Branch tronco | `claude/telegram-assistant-bot-gc3k0b` — **é este o tronco, não o `main`** |
+| Branch da sessão anterior | `claude/feedback-improvements-jpq1hm` (fundido, esgotado) |
 
-### ⚠ Situação do PR #7 — ler antes de abrir PRs
-
-O **PR #7 foi fundido com apenas o primeiro dos quatro commits** (`ccd4300`). O
-utilizador fundiu-o a 15/08 às 02:31, quando ainda só tinha esse. Os três
-commits seguintes ficaram no branch **sem PR nenhum a segui-los**:
+**Está tudo fundido no tronco.** Nada ficou pendente:
 
 ```
-8c804eb  Lembretes deixam de se perder em silêncio          ← POR FUNDIR
-2d092ab  Janela própria no Windows, em vez de aba do navegador  ← POR FUNDIR
-beb30db  Unifica o painel do Windows e do Linux num só (NiceGUI) ← POR FUNDIR
-ccd4300  Painel de controlo para Linux/Ubuntu                ← fundido no PR #7
+PR #8  beb30db  Unifica o painel do Windows e do Linux num só (NiceGUI)
+       2d092ab  Janela própria no Windows, em vez de aba do navegador
+       8c804eb  Lembretes deixam de se perder em silêncio
+       4fe2606  Documento de passagem (este ficheiro)
+PR #7  ccd4300  Painel de controlo para Linux/Ubuntu
 ```
 
-Um PR fundido não pode seguir trabalho novo. Estes três commits precisam de um
-**PR novo** contra `claude/telegram-assistant-bot-gc3k0b` — o merge-base é o
-`ccd4300`, por isso o diff sai exactamente com estes três (mais este documento).
-Não é preciso rebase: o `ccd4300` já é antepassado comum dos dois lados.
+### Como começar
+
+O `claude/feedback-improvements-jpq1hm` está **fundido e esgotado** — não
+empilhes commits novos em cima dele. Parte do tronco actualizado:
+
+```bash
+git fetch origin claude/telegram-assistant-bot-gc3k0b
+git checkout -B <branch-novo> origin/claude/telegram-assistant-bot-gc3k0b
+```
+
+> **Armadilha que já aconteceu uma vez:** o PR #7 foi fundido quando ainda só
+> tinha o primeiro dos quatro commits, e os outros três ficaram no branch sem
+> PR nenhum a segui-los — só se deu por isso ao preparar este documento. Um PR
+> fundido não pode seguir trabalho novo. Se continuares a empurrar commits para
+> um branch depois de abrires o PR, **confirma antes de terminares** que o PR
+> ainda os apanha (`mcp__github__pull_request_read`, campo `merged` e o `sha` do
+> `head`) em vez de assumir que sim.
 
 ---
 
