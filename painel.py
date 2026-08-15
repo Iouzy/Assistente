@@ -1,11 +1,12 @@
 """Painel de controlo do assistente — versão web local (NiceGUI), para
 Windows e Linux por igual.
 
-Uma página servida em localhost e aberta sozinha no navegador: ligar,
-desligar, consola ao vivo, gestão de utilizadores, credenciais e
-actualização automática. O mesmo ficheiro corre nos dois sistemas — só o
-caminho do Python do `.venv` e a forma de abrir a pasta do projecto mudam
-consoante `sys.platform`, mais abaixo.
+Uma página servida em localhost: ligar, desligar, consola ao vivo, gestão de
+utilizadores, credenciais e actualização automática. No Windows abre como
+janela própria (WebView2, sem moldura de navegador); no Linux, por omissão,
+numa aba do navegador — ver `MODO_NATIVO`, mais abaixo. O mesmo ficheiro
+corre nos dois sistemas — só o caminho do Python do `.venv`, a forma de
+abrir a pasta do projecto e o modo nativo mudam consoante `sys.platform`.
 
 Substitui o antigo painel em Tkinter (`windows/painel.pyw`): manter dois
 painéis com o mesmo conjunto de funcionalidades, um por sistema operativo,
@@ -52,6 +53,25 @@ if EM_WINDOWS:
 else:
     PYTHON = RAIZ / ".venv" / "bin" / "python"
     CREATIONFLAGS = 0
+
+
+def _tem_pywebview() -> bool:
+    try:
+        import webview  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# Janela própria (via pywebview/WebView2) em vez de uma aba do navegador.
+# Por omissão, ligado no Windows — onde o WebView2 já vem instalado com o
+# Edge, sem nada a acrescentar — e desligado no Linux, onde pywebview
+# depende de bibliotecas de sistema (GTK ou Qt) que podem não estar
+# presentes. Pode forçar-se com PAINEL_NATIVE=0 ou =1.
+MODO_NATIVO = (
+    os.environ.get("PAINEL_NATIVE", "1" if EM_WINDOWS else "0") == "1"
+    and _tem_pywebview()
+)
 
 
 def abrir_pasta() -> None:
@@ -654,17 +674,20 @@ async def _ciclo_auto_actualizacao() -> None:
 @app.on_startup
 def _ao_arrancar() -> None:
     asyncio.create_task(_ciclo_auto_actualizacao())
-    if os.environ.get("PAINEL_ABRIR_NAVEGADOR", "1") == "1":
+    # Em modo nativo é o próprio `ui.run(native=True)` que abre a janela —
+    # abrir também o navegador seria a mais.
+    if not MODO_NATIVO and os.environ.get("PAINEL_ABRIR_NAVEGADOR", "1") == "1":
         threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{PORTA}/")).start()
 
 
 def main() -> int:
-    # `show=False` porque abrimos o navegador nós próprios em `_ao_arrancar`,
-    # com um pequeno atraso — assim não se perde a primeira carga da página
-    # numa máquina lenta a arrancar o servidor. `reload=False` porque isto
-    # não é ambiente de desenvolvimento: recarregar sozinho ao detectar uma
-    # alteração de ficheiro (por exemplo, a meio de um `git pull`) partiria a
-    # ligação a meio de uma actualização.
+    # `show=False` porque, sem modo nativo, abrimos o navegador nós próprios
+    # em `_ao_arrancar`, com um pequeno atraso — assim não se perde a
+    # primeira carga da página numa máquina lenta a arrancar o servidor. Em
+    # modo nativo `show` não tem efeito: a janela abre sempre sozinha.
+    # `reload=False` porque isto não é ambiente de desenvolvimento: recarregar
+    # sozinho ao detectar uma alteração de ficheiro (por exemplo, a meio de um
+    # `git pull`) partiria a ligação a meio de uma actualização.
     ui.run(
         title="Assistente — Painel de Controlo",
         host="127.0.0.1",
@@ -672,7 +695,8 @@ def main() -> int:
         dark=True,
         show=False,
         reload=False,
-        native=False,
+        native=MODO_NATIVO,
+        window_size=(1100, 780) if MODO_NATIVO else None,
     )
     return 0
 
