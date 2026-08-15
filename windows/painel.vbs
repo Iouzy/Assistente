@@ -12,7 +12,7 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 
 pastaProjeto = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 pythonw = pastaProjeto & "\.venv\Scripts\pythonw.exe"
-painel = pastaProjeto & "\windows\painel.pyw"
+painel = pastaProjeto & "\painel.py"
 
 If Not fso.FileExists(pythonw) Then
     MsgBox "Nao encontrei o ambiente virtual em:" & vbCrLf & pythonw & vbCrLf & vbCrLf & _

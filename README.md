@@ -186,8 +186,8 @@ Há duas maneiras de gerir a lista, e é o `ALLOWED_USER_IDS` que decide qual.
 #### Modo base de dados (`ALLOWED_USER_IDS` vazio)
 
 Autoriza-te a ti primeiro, pelo painel de controlo — botão **👥 Utilizadores**
-(Windows: secção 3.7; Linux: secção 3.8): escreve o teu id, dá-lhe um nome e
-carrega em **Adicionar**. O primeiro id da lista fica **dono**. (Para saberes
+(secção 3.7): escreve o teu id, dá-lhe um nome e carrega em **Adicionar**. O
+primeiro id da lista fica **dono**. (Para saberes
 o teu id, manda uma mensagem ao @userinfobot.)
 
 Daí em diante geres tudo pelo Telegram:
@@ -300,55 +300,70 @@ ensaio a seco (nada é executado nem gravado na base de dados real) e custa
 poucos cêntimos. Vale a pena correr sempre que se mexer nas descrições em
 `TOOL_SCHEMAS`.
 
-### 3.7. Correr em segundo plano no Windows
+### 3.7. Painel de controlo (Windows e Ubuntu)
 
-| Ficheiro | Para quê |
-|---|---|
-| **`windows/painel.vbs`** | **Painel de controlo: ligar, parar, ver a consola, utilizadores, actualizar** |
-| `windows/iniciar_bot.bat` | Arranca com janela visível — bom para testar |
-| `windows/iniciar_oculto.vbs` | Arranca **sem janela**, via `pythonw.exe` |
-| `windows/parar_bot.bat` | Pára o bot que corre sem janela |
+Um único painel (`painel.py`, NiceGUI) serve os dois sistemas: uma página
+local, aberta sozinha no navegador, com três abas.
 
-**O caminho mais simples** é fazer um atalho para `windows/painel.vbs` no
-Ambiente de Trabalho: uma janela com estado, botões Ligar/Parar, a consola do
-bot ao vivo e um botão que faz `git pull`.
+- **Consola** — botões **Ligar**/**Parar** e a saída do bot ao vivo. Parar
+  não mata o processo: cria o ficheiro `.stop-assistente`, que o `main.py`
+  vigia, e o bot encerra ordenadamente — a memória de curto prazo é gravada
+  antes de sair. Só ao fim de 30 segundos sem obedecer é que é terminado à
+  força.
+- **Utilizadores** — a gestão de acesso da secção 3.4.1: dar e retirar
+  permissões, passar a coroa de dono. Escreve na mesma tabela que o `/allow`
+  usa e pode ser feito com o assistente a correr — ele relê a lista de 10 em
+  10 segundos.
+- **Credenciais** — onde entram o `TELEGRAM_TOKEN` e a `DEEPSEEK_API_KEY`.
+  Escreve-os aqui e o painel grava-os no `.env` (criado na hora, a partir do
+  `.env.example`, se ainda não existir) — não é preciso editar ficheiro
+  nenhum à mão. Se já tiveres as chaves configuradas noutro sistema operativo
+  do mesmo computador (por exemplo, um arranque duplo Windows/Ubuntu), também
+  podes simplesmente copiar o `.env` de lá para aqui em vez de as voltar a
+  escrever.
 
-O botão **Parar** não mata o processo: cria o ficheiro `.stop-assistente`, que
-o `main.py` vigia, e o bot encerra ordenadamente — a memória de curto prazo é
-gravada antes de sair. Só ao fim de 30 segundos sem obedecer é que é terminado
-à força.
+O botão **Actualizar agora** faz `git pull` e, comparando os ficheiros entre
+commits, reinstala as dependências se o `requirements.txt` (ou o
+`requirements-painel.txt`) mudar, e avisa na consola se o próprio painel
+tiver sido actualizado — o código em memória é o do arranque, por isso só
+vale depois de o reabrir. Além do botão, o painel verifica sozinho a cada 6
+horas, sem precisar de clicar em nada — só corre com o assistente desligado,
+para não mexer no código a meio de uma execução.
 
-O botão **Utilizadores** abre a gestão de permissões (secção 3.4.1): dar e
-retirar acesso, e passar a coroa de dono. Escreve na mesma tabela que o
-`/allow` usa e pode ser feito com o assistente a correr — ele relê a lista de
-10 em 10 segundos.
+#### 3.7.1. Windows
 
-O botão **Actualizar** faz `git pull` e, comparando os ficheiros entre commits,
-reinstala as dependências se o `requirements.txt` mudar e propõe reabrir-se se
-o próprio painel tiver sido actualizado (o código em memória é o do arranque).
+```
+windows\instalar.bat
+```
 
-**Arrancar sozinho ao iniciar sessão:** `Windows`+`R` → `shell:startup` →
-copiar para lá um **atalho** para `iniciar_oculto.vbs`.
-
-Sem janela não há registos no ecrã, por isso o `.vbs` define `LOG_FILE` para
-`assistente.log`. É aí que se vê o que aconteceu (`type assistente.log`).
+Cria o `.venv`, instala as dependências (bot + painel) e um **atalho no
+Ambiente de Trabalho** — "Assistente — Painel de Controlo". A partir daí é
+duplo clique nesse atalho; não é preciso terminal nem escrever `python`
+nenhum.
 
 | Ação | O bot… |
 |---|---|
 | Bloquear o ecrã (`Windows`+`L`) | ✅ continua |
-| Fechar a janela do cmd (se arrancou oculto) | ✅ continua |
 | **Suspender ou hibernar** | ❌ pára |
 | Terminar sessão / reiniciar / desligar | ❌ pára |
 
 Para não suspender: **Definições → Sistema → Energia → Suspender: Nunca**, e
 **Painel de Controlo → Opções de Energia → ao fechar a tampa: Não fazer nada**.
 
-### 3.8. Correr no Ubuntu (painel de controlo)
+Para correr sem sequer o painel (por exemplo, num servidor Windows):
 
-Equivalente ao painel do Windows (secção 3.7), mas como página web servida em
-`localhost` — não precisa de Tkinter nem de nada específico do Windows.
+| Ficheiro | Para quê |
+|---|---|
+| `windows/iniciar_bot.bat` | Arranca com janela visível — bom para testar |
+| `windows/iniciar_oculto.vbs` | Arranca **sem janela**, via `pythonw.exe` |
+| `windows/parar_bot.bat` | Pára o bot que corre sem janela |
 
-**Instalação, uma vez:**
+**Arrancar sozinho ao iniciar sessão:** `Windows`+`R` → `shell:startup` →
+copiar para lá um **atalho** para `iniciar_oculto.vbs`. Sem janela não há
+registos no ecrã, por isso o `.vbs` define `LOG_FILE` para `assistente.log` —
+é aí que se vê o que aconteceu (`type assistente.log`).
+
+#### 3.7.2. Ubuntu / Linux
 
 ```bash
 git clone <o-teu-fork-ou-repositório> Assistente
@@ -356,39 +371,12 @@ cd Assistente
 bash linux/instalar.sh
 ```
 
-Isto cria o ambiente virtual, instala as dependências do bot e do painel, e
-regista um atalho **"Assistente — Painel de Controlo"** no menu de
-aplicações. Não cria o `.env` nem pede credenciais — isso faz-se dentro do
-próprio painel, a seguir.
+Cria o `.venv`, instala as dependências (bot + painel) e regista um atalho
+**"Assistente — Painel de Controlo"** no menu de aplicações (o script diz
+como o copiar também para o Ambiente de Trabalho, se preferires). A partir
+daí é abrir o atalho; não é preciso terminal nem escrever `python` nenhum.
 
-**A partir daí, é só abrir o atalho** (menu de aplicações, ou copiado para o
-Ambiente de Trabalho — o `instalar.sh` diz o caminho exacto). Abre o
-`linux/painel.py`, que arranca um servidor local e abre-o sozinho numa aba do
-navegador. Não é preciso terminal nem escrever `python` nenhum depois deste
-primeiro passo.
-
-O painel tem três abas:
-
-- **Consola** — os botões **Ligar**/**Parar** (o mesmo encerramento ordenado
-  do painel do Windows, pelo ficheiro `.stop-assistente`) e a saída do bot ao
-  vivo.
-- **Utilizadores** — a mesma gestão de acesso da secção 3.4.1: dar e retirar
-  permissões, passar a coroa de dono. Pode fazer-se com o bot ligado.
-- **Credenciais** — onde entram o `TELEGRAM_TOKEN` e a `DEEPSEEK_API_KEY`.
-  Escreve-os aqui e o painel grava-os no `.env` (criado na hora, a partir do
-  `.env.example`, se ainda não existir) — não há ficheiro nenhum para copiar
-  à mão de outro sistema. Se já tiveres as chaves noutra instalação (por
-  exemplo, num Windows do mesmo computador em arranque duplo), também podes
-  simplesmente copiar o `.env` de lá para aqui em vez de as voltar a escrever.
-
-**Actualização:** o botão **Actualizar agora** faz o mesmo que o do Windows
-(`git pull`, reinstala dependências se mudaram). O painel do Linux acrescenta
-uma verificação automática a cada 6 horas, sem precisar de clicar em nada —
-só corre com o assistente desligado, para não mexer no código a meio de uma
-execução. Se a actualização tocar no próprio painel, fica um aviso na consola
-a pedir para o reabrir.
-
-### 3.9. Deixar a correr sempre num servidor Linux (opcional)
+### 3.8. Deixar a correr sempre num servidor Linux (opcional)
 
 `/etc/systemd/system/assistente.service`:
 
@@ -566,8 +554,7 @@ desaparecia ao desligar o bot.
 | `scheduler.py` | Agendamento, disparo e restauro de lembretes |
 | `config.py` | Variáveis de ambiente, validadas no arranque |
 | `acessos.py` | Lista de acesso e credenciais vistas do painel — só biblioteca-padrão |
-| `windows/painel.pyw` | Painel de controlo do Windows (tkinter): processo, consola, utilizadores |
-| `linux/painel.py` | Painel de controlo do Linux (NiceGUI): processo, consola, utilizadores, credenciais, auto-actualização |
+| `painel.py` | Painel de controlo (NiceGUI, Windows e Ubuntu): processo, consola, utilizadores, credenciais, auto-actualização |
 
 ### 5.7. Ferramentas expostas ao modelo
 

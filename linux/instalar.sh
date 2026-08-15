@@ -23,7 +23,7 @@ fi
 
 echo "A instalar as dependências (bot + painel)..."
 .venv/bin/pip install --quiet --upgrade pip
-.venv/bin/pip install --quiet -r requirements.txt -r linux/requirements.txt
+.venv/bin/pip install --quiet -r requirements.txt -r requirements-painel.txt
 
 chmod +x linux/iniciar_painel.sh
 

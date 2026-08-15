@@ -1,20 +1,25 @@
-"""Painel de controlo do assistente para Linux — versão web local (NiceGUI).
+"""Painel de controlo do assistente — versão web local (NiceGUI), para
+Windows e Linux por igual.
 
-Faz o que o painel do Windows faz (ligar, desligar, actualizar, consola,
-utilizadores), mas como página web servida em localhost e aberta sozinha no
-navegador — não precisa do Tkinter nem de `pythonw`, que não fazem sentido
-fora do Windows. Acrescenta duas coisas que faltavam lá:
+Uma página servida em localhost e aberta sozinha no navegador: ligar,
+desligar, consola ao vivo, gestão de utilizadores, credenciais e
+actualização automática. O mesmo ficheiro corre nos dois sistemas — só o
+caminho do Python do `.venv` e a forma de abrir a pasta do projecto mudam
+consoante `sys.platform`, mais abaixo.
 
-* Um formulário para as credenciais, para não ser preciso editar o `.env`
-  à mão nem copiar o ficheiro entre sistemas operativos.
-* Actualização automática periódica, e não só a pedido.
+Substitui o antigo painel em Tkinter (`windows/painel.pyw`): manter dois
+painéis com o mesmo conjunto de funcionalidades, um por sistema operativo,
+era o dobro do trabalho para metade das funcionalidades — o de Tkinter não
+tinha credenciais nem actualização automática.
 
-Pensado para uma pessoa e uma janela de cada vez — como o painel do Windows,
-que também é uma janela só. Abrir duas abas ao mesmo tempo funciona, mas a
-consola e os campos só reflectem a última aba que os desenhou.
+Pensado para uma pessoa e uma janela de cada vez. Abrir duas abas ao mesmo
+tempo funciona, mas a consola e os campos só reflectem a última aba que os
+desenhou.
 
-Uso:  duplo clique em linux/iniciar_painel.desktop
-      ou  .venv/bin/python linux/painel.py
+Uso:  duplo clique no atalho (windows/painel.vbs, ou o atalho que o
+      linux/instalar.sh regista no menu de aplicações)
+      ou  .venv/Scripts/python.exe painel.py   (Windows)
+      ou  .venv/bin/python painel.py           (Linux)
 """
 
 from __future__ import annotations
@@ -28,15 +33,36 @@ import threading
 import webbrowser
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import acessos  # noqa: E402
 
 from nicegui import app, ui  # noqa: E402
 
-RAIZ = Path(__file__).resolve().parent.parent
+RAIZ = Path(__file__).resolve().parent
 STOP_FILE = RAIZ / ".stop-assistente"
-PYTHON = RAIZ / ".venv" / "bin" / "python"
 LOG_FILE = RAIZ / "assistente.log"
+
+EM_WINDOWS = sys.platform == "win32"
+if EM_WINDOWS:
+    PYTHON = RAIZ / ".venv" / "Scripts" / "python.exe"
+    # Sem isto, cada `git`/`pip`/`main.py` lançado a partir do painel (que
+    # corre sem consola própria, via pythonw.exe) abria a sua própria janela
+    # preta por instantes — um efeito lateral só do Windows.
+    CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+else:
+    PYTHON = RAIZ / ".venv" / "bin" / "python"
+    CREATIONFLAGS = 0
+
+
+def abrir_pasta() -> None:
+    """Abre a pasta do projecto no gestor de ficheiros do sistema."""
+    try:
+        if EM_WINDOWS:
+            os.startfile(RAIZ)  # noqa: S606
+        else:
+            subprocess.Popen(["xdg-open", str(RAIZ)])
+    except OSError as exc:
+        painel._linha(f"Não consegui abrir a pasta: {exc}\n", "erro")
 
 # Porta do painel. Só em localhost — nunca é exposta à rede (ver `ui.run` no
 # fim do ficheiro, sem `host="0.0.0.0"`).
@@ -79,7 +105,11 @@ class Painel:
             return
         if not PYTHON.exists():
             self._linha(f"Não encontrei o Python em: {PYTHON}\n", "erro")
-            self._linha("Crie o ambiente virtual com:  python3 -m venv .venv\n", "erro")
+            self._linha(
+                "Crie o ambiente virtual com:  "
+                + ("python -m venv .venv" if EM_WINDOWS else "python3 -m venv .venv") + "\n",
+                "erro",
+            )
             return
         if not (RAIZ / ".env").exists():
             self._linha(
@@ -108,6 +138,7 @@ class Painel:
                 errors="replace",
                 bufsize=1,
                 env=ambiente,
+                creationflags=CREATIONFLAGS,
             )
         except OSError as exc:
             self._linha(f"Falha ao arrancar: {exc}\n", "erro")
@@ -175,11 +206,11 @@ class Painel:
             if "requirements.txt" in alterados:
                 self._linha("\nAs dependências do bot mudaram — a instalar...\n")
                 self._executar([str(PYTHON), "-m", "pip", "install", "-r", "requirements.txt"])
-            if "linux/requirements.txt" in alterados:
+            if "requirements-painel.txt" in alterados:
                 self._linha("\nAs dependências do painel mudaram — a instalar...\n")
-                self._executar([str(PYTHON), "-m", "pip", "install", "-r", "linux/requirements.txt"])
+                self._executar([str(PYTHON), "-m", "pip", "install", "-r", "requirements-painel.txt"])
 
-            if any(f.startswith(("linux/painel", "acessos.py")) for f in alterados):
+            if any(f.startswith(("painel.py", "acessos.py")) for f in alterados):
                 self._linha(
                     "\nO painel também foi actualizado — a versão nova só vale depois "
                     "de o reabrir. Feche esta janela e volte a abrir o atalho.\n",
@@ -195,6 +226,7 @@ class Painel:
             resultado = subprocess.run(
                 ["git", *args], cwd=str(RAIZ), capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=30,
+                creationflags=CREATIONFLAGS,
             )
             return resultado.stdout.strip() if resultado.returncode == 0 else ""
         except (OSError, subprocess.TimeoutExpired):
@@ -205,6 +237,7 @@ class Painel:
             processo = subprocess.Popen(
                 comando, cwd=str(RAIZ), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
+                creationflags=CREATIONFLAGS,
             )
         except FileNotFoundError:
             self._linha(f"Não encontrei o comando: {comando[0]}\n", "erro")
@@ -547,7 +580,7 @@ def pagina_principal() -> None:
                    ).start())
         ui.button("👥 Utilizadores", on_click=lambda: tabs.set_value("utilizadores"))
         ui.button("🔑 Credenciais", on_click=lambda: tabs.set_value("credenciais"))
-        ui.button("📁 Pasta", on_click=lambda: subprocess.Popen(["xdg-open", str(RAIZ)]))
+        ui.button("📁 Pasta", on_click=abrir_pasta)
         ui.button("🧹 Limpar consola", on_click=lambda: log_widget.clear())
 
     with ui.tabs().classes("w-full") as tabs:
@@ -562,9 +595,13 @@ def pagina_principal() -> None:
             )
             log_widget.push("Painel pronto. Carregue em «Ligar» para arrancar o assistente.")
             if not PYTHON.exists():
+                comando_criar = (
+                    "python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt"
+                    if EM_WINDOWS else
+                    "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+                )
                 log_widget.push(
-                    f"AVISO: não encontrei o ambiente virtual em {PYTHON}. "
-                    "Crie-o com: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+                    f"AVISO: não encontrei o ambiente virtual em {PYTHON}. Crie-o com: {comando_criar}",
                     classes="text-negative",
                 )
 
