@@ -259,16 +259,29 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# 10. Caminhos ancorados na pasta do projeto, não na de trabalho
+# 10. Caminhos ancorados na pasta de dados, não na de trabalho
 # ---------------------------------------------------------------------------
 import config  # noqa: E402
 
 check("o caminho por omissão da base de dados é absoluto",
       pathlib.Path(config._resolve("assistente.db")).is_absolute())
-check("é ancorado na pasta do projeto",
-      pathlib.Path(config._resolve("assistente.db")).parent == config.PROJECT_ROOT)
+check("é ancorado na pasta de dados",
+      pathlib.Path(config._resolve("assistente.db")).parent == config.DATA_DIR)
+
+# O caminho absoluto tem de ser construído para o sistema onde o teste corre.
+# Estava aqui «/tmp/x.db» à letra, o que em Windows **não é um caminho
+# absoluto** — falta-lhe a letra da unidade — e fazia falhar um teste que
+# estava certo. Só se soube quando o CI passou a correr isto em Windows.
+absoluto = pathlib.Path(tempfile.gettempdir()).resolve() / "x.db"
 check("um caminho absoluto é respeitado",
-      config._resolve("/tmp/x.db") == str(pathlib.Path("/tmp/x.db")))
+      config._resolve(str(absoluto)) == str(absoluto))
+
+if os.name == "nt":
+    # Em Windows, «/tmp/x.db» é relativo à unidade actual: qual unidade
+    # depende de onde o processo foi lançado. Ancorá-lo na pasta de dados é
+    # o que impede uma base de dados nova e vazia de aparecer noutro disco.
+    check("em Windows, um caminho sem unidade é ancorado na pasta de dados",
+          pathlib.Path(config._resolve("/tmp/x.db")).drive == config.DATA_DIR.drive)
 
 
 # ---------------------------------------------------------------------------
