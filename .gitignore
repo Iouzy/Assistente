@@ -31,3 +31,8 @@ env/
 .idea/
 .DS_Store
 .stop-assistente
+
+# Produtos da compilação (PyInstaller / Inno Setup).
+/build/
+/dist/
+/version_info.txt

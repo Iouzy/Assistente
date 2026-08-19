@@ -1,0 +1,118 @@
+# Compila o `Assistente.exe` e o instalador, em Windows, e publica-os.
+#
+# Isto existe porque o PyInstaller **não faz compilação cruzada**: um `.exe`
+# só se compila em Windows, e o desenvolvimento é feito em Linux. Um runner
+# `windows-latest` resolve o problema sem ninguém ter de ter um Windows à mão.
+#
+# Duas formas de o accionar:
+#   * criar uma etiqueta `v1.2.3` → compila **e publica** em Releases;
+#   * a pedido (Actions → Compilar → Run workflow) → compila e deixa o
+#     resultado nos artefactos, sem publicar nada. Serve para experimentar.
+
+name: Compilar
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  # Necessário para criar a Release e anexar-lhe os ficheiros.
+  contents: write
+
+jobs:
+  compilar:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-painel.txt
+          pip install pyinstaller>=6.6
+
+      # As suites offline correm aqui outra vez, na máquina que vai compilar.
+      # Publicar um executável sem saber se os testes passam nesta versão do
+      # Windows seria publicar às cegas.
+      - name: Testes
+        run: |
+          python tests/test_caminhos.py
+          python tests/test_actualizacao.py
+          python tests/test_acessos.py
+          python tests/test_tools.py
+          python tests/test_seguranca.py
+          python tests/test_timeline.py
+          python tests/test_llm.py
+
+      # Uma etiqueta `v1.2.3` que não corresponda ao `versao.py` daria um
+      # programa a anunciar-se com um número e a ser publicado com outro — e
+      # a verificação de versão nova (que compara os dois) nunca mais
+      # assentava. Melhor falhar aqui.
+      - name: Confirmar que a etiqueta corresponde ao versao.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          no_ficheiro=$(python -c "import versao; print(versao.VERSAO)")
+          na_etiqueta="${GITHUB_REF_NAME#v}"
+          echo "versao.py: $no_ficheiro | etiqueta: $na_etiqueta"
+          if [ "$no_ficheiro" != "$na_etiqueta" ]; then
+            echo "::error::A etiqueta $GITHUB_REF_NAME não corresponde ao versao.py ($no_ficheiro)."
+            echo "Suba o número no versao.py, faça commit, e volte a criar a etiqueta."
+            exit 1
+          fi
+
+      - name: Compilar o executável
+        run: pyinstaller --noconfirm --clean Assistente.spec
+
+      # Um `.exe` que não arranca é o modo de falha clássico do PyInstaller —
+      # falta uma importação dinâmica e só se percebe ao abri-lo. `--versao`
+      # obriga-o a arrancar, a importar o que precisa e a responder.
+      - name: Confirmar que o executável arranca
+        run: |
+          $saida = & .\dist\Assistente.exe --versao
+          Write-Host "O executável diz ser a versão: $saida"
+          if (-not $saida) { throw "O executável não respondeu a --versao." }
+
+      - name: Compilar o instalador
+        shell: bash
+        run: |
+          versao=$(python -c "import versao; print(versao.VERSAO)")
+          # O Inno Setup vem instalado nos runners windows-latest.
+          iscc //DMyAppVersion=$versao instalador.iss
+
+      - name: Guardar o resultado nos artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: Assistente-windows
+          path: |
+            dist/Assistente.exe
+            dist/Assistente-instalador-*.exe
+          if-no-files-found: error
+
+      # Só com etiqueta. O `actualizacao.py` procura, entre os anexos, um
+      # ficheiro `.exe` com «instalador» no nome — é assim que sabe o que
+      # descarregar. Mudar o nome do ficheiro parte a actualização automática.
+      - name: Publicar em Releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Assistente-instalador-*.exe
+            dist/Assistente.exe
+          generate_release_notes: true
+          body: |
+            Instalação: descarregue o **Assistente-instalador-…exe** e abra-o.
+
+            Quem já tem o programa instalado não precisa de fazer nada aqui —
+            o painel avisa da versão nova e o botão «Actualizar agora» trata
+            do resto.
+
+            Os seus dados (agenda, notas, credenciais) ficam em
+            `%LOCALAPPDATA%\Assistente` e não são tocados pela actualização.

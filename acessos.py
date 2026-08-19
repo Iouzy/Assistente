@@ -24,8 +24,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-RAIZ = Path(__file__).resolve().parent
-ENV_FILE = RAIZ / ".env"
+import caminhos
+
+RAIZ = caminhos.RAIZ_CODIGO
+PASTA_DADOS = caminhos.PASTA_DADOS
+ENV_FILE = caminhos.FICHEIRO_ENV
 
 # Mesma definição que está no `database.py`; repetida aqui para o painel poder
 # preparar a lista antes da primeira vez que o bot arranca.
@@ -90,9 +93,7 @@ def caminho_base_dados(env: dict[str, str] | None = None) -> Path:
     env = ler_env() if env is None else env
     # O ambiente do sistema ganha ao ficheiro (`load_dotenv(override=False)`).
     bruto = os.environ.get("DATABASE_PATH") or env.get("DATABASE_PATH") or "assistente.db"
-    caminho = Path(bruto.strip())
-    # O bot corre com a raiz do projeto como pasta de trabalho.
-    return caminho if caminho.is_absolute() else RAIZ / caminho
+    return Path(caminhos.resolver(bruto.strip()))
 
 
 def lista_fixa(env: dict[str, str] | None = None) -> tuple[list[int], str]:
@@ -123,7 +124,14 @@ def garantir_env(caminho: Path | str = ENV_FILE, exemplo: Path | str | None = No
     if caminho.exists():
         return False
 
-    exemplo = Path(exemplo) if exemplo is not None else caminho.with_name(".env.example")
+    if exemplo is not None:
+        exemplo = Path(exemplo)
+    else:
+        # O `.env.example` costuma estar ao lado do `.env` (execução a partir
+        # do código). No programa compilado não está: a pasta de dados começa
+        # vazia e o exemplo vem de dentro do próprio `.exe`.
+        ao_lado = caminho.with_name(".env.example")
+        exemplo = ao_lado if ao_lado.exists() else caminhos.EXEMPLO_ENV
     conteudo = exemplo.read_text(encoding="utf-8") if exemplo.exists() else ""
     with open(os.open(caminho, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w", encoding="utf-8") as ficheiro:
         ficheiro.write(conteudo)

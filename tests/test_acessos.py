@@ -89,9 +89,12 @@ except acessos.ErroAcesso:
     check("ficheiro em falta dá erro claro", True)
 
 # --- caminho da base de dados -----------------------------------------------
-check("caminho relativo é resolvido a partir da raiz",
+# Ancorado na pasta de **dados**, não na do código: no programa compilado são
+# duas pastas diferentes, e resolver isto na do código punha a base de dados
+# dentro do `.exe` extraído — apagada no fim de cada execução.
+check("caminho relativo é resolvido a partir da pasta de dados",
       acessos.caminho_base_dados({"DATABASE_PATH": "assistente.db"})
-      == acessos.RAIZ / "assistente.db")
+      == acessos.PASTA_DADOS / "assistente.db")
 absoluto = str(pasta / "outra.db")
 check("caminho absoluto é respeitado",
       acessos.caminho_base_dados({"DATABASE_PATH": absoluto}) == pathlib.Path(absoluto))

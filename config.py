@@ -1,34 +1,38 @@
 """Carregamento e validação da configuração da aplicação.
 
-Todas as definições vêm de variáveis de ambiente, tipicamente carregadas de um
-ficheiro `.env` na raiz do projeto (ver `.env.example`).
+Todas as definições vêm de variáveis de ambiente, tipicamente carregadas do
+ficheiro `.env` da pasta de dados (ver `.env.example` e `caminhos.py`).
 """
 
 from __future__ import annotations
 
 import os
-import pathlib
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
-# Pasta do projeto. Os caminhos por omissão são resolvidos a partir daqui e
-# não da pasta de trabalho: arrancar o bot de outro sítio criava, em silêncio,
-# uma base de dados nova e vazia — ou seja, sem lista de acesso nenhuma.
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parent
+import caminhos
+
+# Pasta do código. Os caminhos por omissão são resolvidos a partir da pasta de
+# dados e não da de trabalho: arrancar o bot de outro sítio criava, em
+# silêncio, uma base de dados nova e vazia — ou seja, sem lista de acesso
+# nenhuma.
+PROJECT_ROOT = caminhos.RAIZ_CODIGO
+
+# Onde ficam a base de dados, o `.env` e o registo. A correr a partir do
+# código é a própria pasta do projeto (como sempre foi); no programa
+# compilado é `%LOCALAPPDATA%\Assistente` — ver `caminhos.py`.
+DATA_DIR = caminhos.PASTA_DADOS
 
 # Carrega o .env para o ambiente do processo. `override=False` garante que
 # variáveis já definidas no sistema (ex.: em produção) têm prioridade.
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+load_dotenv(caminhos.FICHEIRO_ENV, override=False)
 
 
 def _resolve(caminho: str) -> str:
-    """Torna um caminho relativo absoluto, ancorando-o na pasta do projeto."""
-    if not caminho:
-        return caminho
-    p = pathlib.Path(caminho).expanduser()
-    return str(p if p.is_absolute() else PROJECT_ROOT / p)
+    """Torna um caminho relativo absoluto, ancorando-o na pasta de dados."""
+    return caminhos.resolver(caminho)
 
 
 class ConfigError(RuntimeError):

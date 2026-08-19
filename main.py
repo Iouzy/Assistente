@@ -24,10 +24,11 @@ from telegram.error import InvalidToken, NetworkError, TimedOut
 from telegram.ext import Application, ApplicationBuilder
 
 import bot as bot_module
+import caminhos
 import database as db
 import llm
 import scheduler
-from config import PROJECT_ROOT, ConfigError, settings
+from config import ConfigError, settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,9 @@ logger = logging.getLogger(__name__)
 # painel de controlo o desliga — matar o processo à força saltaria o
 # encerramento e perderia a memória de curto prazo por gravar.
 #
-# Ancorado na pasta do projeto, e não na de trabalho: o painel escreve-o lá, e
+# Ancorado na pasta de dados, e não na de trabalho: o painel escreve-o lá, e
 # se o bot fosse arrancado de outro sítio ficavam à espera um do outro.
-STOP_FILE = PROJECT_ROOT / ".stop-assistente"
+STOP_FILE = caminhos.FICHEIRO_STOP
 
 # De quantos em quantos segundos se relê a lista de acesso da base de dados,
 # para apanhar as permissões dadas no painel de controlo (outro processo).

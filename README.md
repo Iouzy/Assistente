@@ -275,17 +275,26 @@ RAM é resumida e gravada antes de encerrar.
 
 ### 3.6. Testes (opcional)
 
-Quatro conjuntos de testes que **não gastam um único token da API** — o cliente
+Conjuntos de testes que **não gastam um único token da API** — o cliente
 DeepSeek é substituído por um duplo de teste:
 
 ```bash
-python tests/test_tools.py     # datas, as 10 ferramentas, BD, lembretes reais
-python tests/test_llm.py       # tool calling, cache, memória, ponte scheduler↔asyncio
-python tests/test_acessos.py   # permissões geridas pelo painel (não abre janelas)
-python tests/test_seguranca.py # porteiro, posse dos dados, saneamento, limites
+python tests/test_tools.py        # datas, as 10 ferramentas, BD, lembretes reais
+python tests/test_llm.py          # tool calling, cache, memória, ponte scheduler↔asyncio
+python tests/test_acessos.py      # permissões geridas pelo painel (não abre janelas)
+python tests/test_seguranca.py    # porteiro, posse dos dados, saneamento, limites
+python tests/test_timeline.py     # linha do tempo
+python tests/test_caminhos.py     # onde ficam os dados, compilado e não compilado
+python tests/test_actualizacao.py # comparação de versões e resposta do GitHub
 ```
 
 Correm em cerca de 30 segundos (esperam pelo disparo real de lembretes).
+
+**Não é preciso corrê-los à mão a cada alteração:** o
+[workflow de testes](.github/workflows/testes.yml) corre-os todos em
+`ubuntu-latest` **e** `windows-latest` a cada `push`. Os dois sistemas porque o
+assistente é usado em Windows e desenvolvido em Linux — houve um bug de
+codificação UTF-8 que só aparecia numa máquina Windows a sério.
 
 O `test_seguranca.py` está escrito do ponto de vista de quem ataca: cada bloco
 corresponde a uma falha concreta que existiu, e passa quando o abuso deixa de
@@ -303,6 +312,35 @@ Manda 26 frases-tipo e mostra que ferramenta o modelo atribuiu a cada uma. É um
 ensaio a seco (nada é executado nem gravado na base de dados real) e custa
 poucos cêntimos. Vale a pena correr sempre que se mexer nas descrições em
 `TOOL_SCHEMAS`.
+
+### 3.6.1. Publicar uma versão nova (para quem mexe no código)
+
+O `.exe` **não se compila aqui** — o PyInstaller não faz compilação cruzada e
+um executável de Windows só se compila em Windows. Quem o compila é o GitHub,
+num runner `windows-latest`:
+
+1. Sobe o número em [`versao.py`](versao.py) e faz commit.
+2. Cria a etiqueta e envia-a:
+   ```bash
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+3. O [workflow de compilação](.github/workflows/compilar.yml) corre os testes
+   nessa máquina, compila o `Assistente.exe` (PyInstaller), confirma que ele
+   arranca, constrói o instalador (Inno Setup) e publica os dois em
+   **Releases**.
+
+A etiqueta tem de corresponder ao `versao.py` — se não corresponder, a
+compilação pára com um erro em vez de publicar um programa que se anuncia com
+um número e é publicado com outro.
+
+Para experimentar sem publicar nada: **Actions → Compilar → Run workflow**.
+Compila na mesma e deixa o resultado nos artefactos da execução.
+
+> O nome do ficheiro do instalador (`Assistente-instalador-….exe`) faz parte do
+> contrato: é por ele que o `actualizacao.py` o distingue do `.exe` solto entre
+> os anexos da release. Mudá-lo parte a actualização de quem já tem o programa
+> instalado.
 
 ### 3.7. Painel de controlo (Windows e Ubuntu)
 
@@ -326,15 +364,64 @@ local, aberta sozinha no navegador, com três abas.
   podes simplesmente copiar o `.env` de lá para aqui em vez de as voltar a
   escrever.
 
-O botão **Actualizar agora** faz `git pull` e, comparando os ficheiros entre
-commits, reinstala as dependências se o `requirements.txt` (ou o
-`requirements-painel.txt`) mudar, e avisa na consola se o próprio painel
-tiver sido actualizado — o código em memória é o do arranque, por isso só
-vale depois de o reabrir. Além do botão, o painel verifica sozinho a cada 6
-horas, sem precisar de clicar em nada — só corre com o assistente desligado,
-para não mexer no código a meio de uma execução.
+O botão **⟳ Actualizar agora** faz coisas diferentes conforme o modo em que o
+painel corre, mas a regra é a mesma nos dois: **nada se actualiza sozinho**.
+
+- **Programa instalado:** no arranque, pergunta à API de *Releases* do GitHub
+  se há versão nova e escreve-o na consola — e fica-se por aí. Só ao carregar
+  no botão é que o instalador da versão nova é descarregado e corrido; ele
+  fecha o painel, substitui os ficheiros e volta a abri-lo. Os dados, que
+  vivem noutra pasta, não são tocados.
+- **A partir do repositório:** faz `git pull` e, comparando os ficheiros entre
+  commits, reinstala as dependências se o `requirements.txt` (ou o
+  `requirements-painel.txt`) mudar, e avisa na consola se o próprio painel
+  tiver sido actualizado — o código em memória é o do arranque, por isso só
+  vale depois de o reabrir.
+
+Em qualquer dos casos é preciso ter o assistente desligado: actualizar
+ficheiros a meio de uma execução corrompia o processo a decorrer.
 
 #### 3.7.1. Windows
+
+Há duas maneiras. A primeira é a recomendada para quem só quer usar o
+assistente.
+
+**a) O instalador (não precisa de Python nem de terminal)**
+
+Descarrega o **`Assistente-instalador-….exe`** da página de
+[Releases](https://github.com/Iouzy/Assistente/releases) e abre-o. Instala em
+`%LOCALAPPDATA%\Programs\Assistente` (sem pedir permissões de administrador),
+cria os atalhos e pergunta se queres que o painel abra sozinho ao iniciar
+sessão no Windows.
+
+A partir daí é um programa normal: duplo clique no ícone, e as credenciais
+preenchem-se na aba «Credenciais». Não há repositório, não há `.venv`, não há
+`git`.
+
+| Onde fica | O quê |
+|---|---|
+| `%LOCALAPPDATA%\Programs\Assistente` | O programa. Substituído a cada actualização |
+| `%LOCALAPPDATA%\Assistente` | **Os teus dados**: base de dados, `.env`, registo |
+
+A separação é o que permite actualizar sem perder nada — e desinstalar o
+programa **não** apaga a pasta dos dados. O botão «📁 Pasta» do painel abre-a.
+
+Para pôr os dados noutro sítio (um disco cifrado, uma pasta sincronizada),
+define a variável de ambiente `ASSISTENTE_DADOS` com o caminho que quiseres.
+Tem de ser uma variável do **sistema**, não uma linha do `.env`: é lida antes
+de o `.env` existir — é ela que decide onde ele é procurado.
+
+Se já usavas o assistente a partir do repositório, a primeira execução procura
+essa pasta e traz de lá o `.env` e a base de dados, copiados (a instalação
+antiga fica intacta). Se ela estiver num sítio invulgar, aponta-lhe o caminho
+com a variável `ASSISTENTE_PASTA_ANTIGA` antes de abrir o programa a primeira
+vez.
+
+**Actualizar:** o painel pergunta ao GitHub, no arranque, se há versão nova, e
+escreve-o na consola. Nunca actualiza sozinho — quem decide é quem carrega em
+«⟳ Actualizar agora», e é aí que o instalador novo é descarregado e corrido.
+
+**b) A partir do código (para mexer no código)**
 
 ```
 windows\instalar.bat
@@ -343,7 +430,8 @@ windows\instalar.bat
 Cria o `.venv`, instala as dependências (bot + painel) e um **atalho no
 Ambiente de Trabalho** — "Assistente — Painel de Controlo". A partir daí é
 duplo clique nesse atalho; não é preciso terminal nem escrever `python`
-nenhum.
+nenhum. Assim, os dados ficam na própria pasta do projecto (como sempre
+ficaram) e o botão «Actualizar agora» faz `git pull`.
 
 | Ação | O bot… |
 |---|---|
@@ -587,7 +675,12 @@ desaparecia ao desligar o bot.
 | `scheduler.py` | Agendamento, disparo e restauro de lembretes |
 | `config.py` | Variáveis de ambiente, validadas no arranque |
 | `acessos.py` | Lista de acesso e credenciais vistas do painel — só biblioteca-padrão |
-| `painel.py` | Painel de controlo (NiceGUI, Windows e Ubuntu): processo, consola, utilizadores, credenciais, auto-actualização |
+| `painel.py` | Painel de controlo (NiceGUI, Windows e Ubuntu): processo, consola, utilizadores, credenciais, actualização |
+| `caminhos.py` | Onde vivem o código e os dados — a diferença entre correr compilado e correr do repositório |
+| `assistente.py` | Ponto de entrada do programa compilado: painel por omissão, bot com `--bot` |
+| `actualizacao.py` | Versões novas pela API de *Releases* do GitHub — verificar, avisar, instalar a pedido |
+| `versao.py` | O número da versão, num sítio só |
+| `Assistente.spec`, `instalador.iss` | Receitas do PyInstaller e do Inno Setup (ver `.github/workflows/compilar.yml`) |
 
 ### 5.7. Ferramentas expostas ao modelo
 
@@ -723,7 +816,9 @@ gerar as respostas.
   em conversa privada. Sem lista, não responde a ninguém.
 - **Ficheiros:** a base de dados (`assistente.db`) e o registo são criados
   legíveis só pelo teu utilizador (0600 em Linux/macOS; em Windows valem as
-  permissões da tua pasta de perfil).
+  permissões da tua pasta de perfil). Ficam na pasta do projecto quando corres
+  a partir do repositório, e em `%LOCALAPPDATA%\Assistente` quando usas o
+  programa instalado — nunca saem do teu computador.
 - **`.gitignore`:** exclui o `.env` *e as suas cópias* (`.env.bak`, que o painel
   escreve ao passar a gestão da lista para a base de dados), a base de dados e
   os ficheiros de registo.

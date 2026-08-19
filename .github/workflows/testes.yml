@@ -1,0 +1,109 @@
+# Corre as suites de testes em Ubuntu e em Windows a cada alteração.
+#
+# Porquê os dois sistemas: o assistente é usado em Windows mas desenvolvido em
+# Linux. O bug de codificação UTF-8 do PR #6 só aparecia numa máquina Windows
+# a sério e custou uma ida ao computador do utilizador para ser encontrado —
+# aqui apanha-se de graça, em dois minutos.
+#
+# É também o pré-requisito da compilação: o `compilar.yml` só empacota o
+# `.exe` depois de isto passar.
+
+name: Testes
+
+on:
+  # Só `push`: um `pull_request` a acompanhá-lo corria tudo duas vezes por
+  # cada commit, e o resultado do push já aparece na página do PR — é o mesmo
+  # commit.
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+# Um push novo no mesmo branch cancela a execução anterior: o que interessa é
+# o resultado do último commit, não a fila de todos os que já foram
+# ultrapassados.
+concurrency:
+  group: testes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Sem isto, a primeira falha cancelava o outro sistema — e saber que
+      # falha só em Windows (ou só em Linux) é metade do diagnóstico.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # A versão do ambiente do utilizador. Ver a nota do
+          # requirements.txt sobre o python-telegram-bot 22.8.
+          python-version: '3.14'
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-painel.txt
+
+      - name: Compilar todos os módulos
+        # Apanha erros de sintaxe em ficheiros que nenhum teste importa (o
+        # painel, por exemplo, que precisa de interface para correr).
+        run: python -m compileall -q .
+
+      - name: Testes de caminhos e pasta de dados
+        run: python tests/test_caminhos.py
+
+      - name: Testes de actualização
+        run: python tests/test_actualizacao.py
+
+      - name: Testes de acessos e credenciais
+        run: python tests/test_acessos.py
+
+      - name: Testes das ferramentas
+        run: python tests/test_tools.py
+
+      - name: Testes de segurança
+        run: python tests/test_seguranca.py
+
+      - name: Testes da linha do tempo
+        run: python tests/test_timeline.py
+
+      - name: Testes do ciclo LLM
+        run: python tests/test_llm.py
+
+  # A escolha de ferramenta é o que mais falha no assistente e o único teste
+  # que a mede fala com a API a sério: gasta cêntimos e precisa da chave. Fica
+  # fora do caminho normal — corre a pedido, e só se o segredo existir.
+  escolha-de-ferramenta:
+    name: Escolha de ferramenta (API a sério)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Correr o ensaio
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "Sem o segredo DEEPSEEK_API_KEY — nada a correr."
+            echo "Defina-o em Settings → Secrets and variables → Actions."
+            exit 0
+          fi
+          python tests/test_tool_choice.py

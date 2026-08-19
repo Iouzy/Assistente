@@ -2,11 +2,19 @@
 Windows e Linux por igual.
 
 Uma página servida em localhost: ligar, desligar, consola ao vivo, gestão de
-utilizadores, credenciais e actualização automática. No Windows abre como
-janela própria (WebView2, sem moldura de navegador); no Linux, por omissão,
-numa aba do navegador — ver `MODO_NATIVO`, mais abaixo. O mesmo ficheiro
-corre nos dois sistemas — só o caminho do Python do `.venv`, a forma de
-abrir a pasta do projecto e o modo nativo mudam consoante `sys.platform`.
+utilizadores, credenciais e actualização. No Windows abre como janela própria
+(WebView2, sem moldura de navegador); no Linux, por omissão, numa aba do
+navegador — ver `MODO_NATIVO`, mais abaixo. O mesmo ficheiro corre nos dois
+sistemas — só o caminho do Python do `.venv`, a forma de abrir a pasta e o
+modo nativo mudam consoante `sys.platform`.
+
+Corre de duas maneiras, e sabe distingui-las (`caminhos.CONGELADO`):
+
+* **compilado**, dentro do `Assistente.exe` — arranca o bot relançando o
+  próprio executável com `--bot`, e actualiza-se descarregando o instalador
+  publicado em *Releases*;
+* **a partir do código**, com o `.venv` — arranca `main.py` e actualiza-se
+  com `git pull`, como sempre fez.
 
 Substitui o antigo painel em Tkinter (`windows/painel.pyw`): manter dois
 painéis com o mesmo conjunto de funcionalidades, um por sistema operativo,
@@ -36,12 +44,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import acessos  # noqa: E402
+import actualizacao  # noqa: E402
+import caminhos  # noqa: E402
+import versao  # noqa: E402
 
 from nicegui import app, ui  # noqa: E402
 
-RAIZ = Path(__file__).resolve().parent
-STOP_FILE = RAIZ / ".stop-assistente"
-LOG_FILE = RAIZ / "assistente.log"
+RAIZ = caminhos.RAIZ_CODIGO
+PASTA_DADOS = caminhos.PASTA_DADOS
+STOP_FILE = caminhos.FICHEIRO_STOP
+LOG_FILE = PASTA_DADOS / "assistente.log"
+
+# Compilado (`Assistente.exe`) ou a partir do código (`.venv` + `main.py`)?
+# Muda como se arranca o bot e como se actualiza — o resto do painel é igual.
+CONGELADO = caminhos.CONGELADO
 
 EM_WINDOWS = sys.platform == "win32"
 if EM_WINDOWS:
@@ -53,6 +69,23 @@ if EM_WINDOWS:
 else:
     PYTHON = RAIZ / ".venv" / "bin" / "python"
     CREATIONFLAGS = 0
+
+
+# Pasta de trabalho dos processos que o painel lança. Compilado, a `RAIZ` é
+# uma pasta temporária que o PyInstaller extrai e apaga no fim — não serve de
+# pasta de trabalho a nada; os dados servem.
+PASTA_TRABALHO = PASTA_DADOS if caminhos.CONGELADO else RAIZ
+
+
+def comando_do_bot() -> list[str]:
+    """Como se arranca o processo do bot, neste modo de execução.
+
+    Compilado, o executável relança-se a si próprio: não há `.venv` nem
+    `main.py` no disco, só o `Assistente.exe` — ver `assistente.py`.
+    """
+    if CONGELADO:
+        return [sys.executable, "--bot"]
+    return [str(PYTHON), "main.py"]
 
 
 def _tem_pywebview() -> bool:
@@ -75,23 +108,23 @@ MODO_NATIVO = (
 
 
 def abrir_pasta() -> None:
-    """Abre a pasta do projecto no gestor de ficheiros do sistema."""
+    """Abre a pasta de dados no gestor de ficheiros do sistema.
+
+    A de dados e não a do programa: é lá que estão a base de dados, o `.env` e
+    o registo — o que alguém pode querer copiar, salvaguardar ou apagar.
+    """
+    caminhos.garantir_pasta_dados()
     try:
         if EM_WINDOWS:
-            os.startfile(RAIZ)  # noqa: S606
+            os.startfile(PASTA_DADOS)  # noqa: S606
         else:
-            subprocess.Popen(["xdg-open", str(RAIZ)])
+            subprocess.Popen(["xdg-open", str(PASTA_DADOS)])
     except OSError as exc:
         painel._linha(f"Não consegui abrir a pasta: {exc}\n", "erro")
 
 # Porta do painel. Só em localhost — nunca é exposta à rede (ver `ui.run` no
 # fim do ficheiro, sem `host="0.0.0.0"`).
 PORTA = int(os.environ.get("PAINEL_PORT", "8765"))
-
-# De quantas em quantas horas o painel verifica sozinho se há código novo no
-# repositório. Só corre quando o assistente está desligado — actualizar
-# ficheiros a meio de uma execução corrompia o processo a decorrer.
-INTERVALO_AUTO_ACTUALIZACAO_HORAS = 6
 
 # Segundos à espera de um encerramento ordenado antes de terminar à força.
 ESPERA_PARAGEM = 30
@@ -123,7 +156,7 @@ class Painel:
     def ligar(self) -> None:
         if self.a_correr():
             return
-        if not PYTHON.exists():
+        if not CONGELADO and not PYTHON.exists():
             self._linha(f"Não encontrei o Python em: {PYTHON}\n", "erro")
             self._linha(
                 "Crie o ambiente virtual com:  "
@@ -131,7 +164,7 @@ class Painel:
                 "erro",
             )
             return
-        if not (RAIZ / ".env").exists():
+        if not caminhos.FICHEIRO_ENV.exists():
             self._linha(
                 "Falta o ficheiro .env. Preencha as credenciais na aba "
                 "«Credenciais» antes de ligar.\n",
@@ -148,8 +181,8 @@ class Painel:
 
         try:
             self.processo = subprocess.Popen(
-                [str(PYTHON), "main.py"],
-                cwd=str(RAIZ),
+                comando_do_bot(),
+                cwd=str(PASTA_TRABALHO),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -196,17 +229,74 @@ class Painel:
                 self.processo.terminate()
 
     # -- actualização ---------------------------------------------------------
-    def verificar_actualizacoes(self, automatico: bool) -> None:
-        """Traz o código novo, instala dependências se precisar.
+    def procurar_versao_nova(self) -> None:
+        """Pergunta se há versão nova e **escreve na consola**. Não instala nada.
 
-        Chamado tanto pelo botão «Actualizar agora» como pelo ciclo periódico
-        (`automatico=True`), que só corre com o assistente desligado.
+        Corre uma vez, no arranque do painel. É a parte «avisar» da regra:
+        quem decide se e quando actualiza é quem carrega no botão. Só faz
+        sentido no programa compilado — a partir do código, quem manda é o
+        `git`, e perguntar ao GitHub por versões publicadas não diria nada
+        sobre o que está no repositório local.
         """
-        if self.a_correr():
-            if not automatico:
-                self._linha("Pare o assistente antes de actualizar.\n", "aviso")
+        if not CONGELADO:
+            return
+        try:
+            nova = actualizacao.ha_versao_nova()
+        except actualizacao.ErroActualizacao as exc:
+            # Não conseguir verificar não é um erro que valha a pena gritar:
+            # o computador pode simplesmente estar sem rede.
+            self._linha(f"(não consegui verificar se há versão nova: {exc})\n")
             return
 
+        if nova is None:
+            return
+
+        self._linha(
+            f"\n🔔 Há uma versão nova: {nova['versao']} (tem a {versao.VERSAO}).\n"
+            "   Carregue em «Actualizar agora» quando lhe der jeito.\n",
+            "aviso",
+        )
+        if nova["notas"]:
+            for linha in nova["notas"].splitlines()[:10]:
+                self._linha(f"   {linha}\n")
+
+    def actualizar(self) -> None:
+        """O botão «Actualizar agora»: instalador no `.exe`, `git pull` no código."""
+        if self.a_correr():
+            self._linha("Pare o assistente antes de actualizar.\n", "aviso")
+            return
+        if CONGELADO:
+            self._actualizar_compilado()
+        else:
+            self._actualizar_do_git()
+
+    def _actualizar_compilado(self) -> None:
+        """Descarrega o instalador da versão nova e entrega-lhe o controlo."""
+        self._linha("\n⟳  A perguntar ao GitHub se há versão nova...\n")
+        try:
+            nova = actualizacao.ha_versao_nova()
+            if nova is None:
+                self._linha(f"Já está na última versão ({versao.VERSAO}).\n", "ok")
+                return
+
+            self._linha(f"A descarregar a versão {nova['versao']}...\n")
+            instalador = actualizacao.descarregar(nova["url"])
+            self._linha(
+                "Descarregado. O instalador vai fechar o painel e abri-lo outra "
+                "vez no fim — os seus dados não são tocados.\n",
+                "ok",
+            )
+            actualizacao.instalar(instalador)
+        except actualizacao.ErroActualizacao as exc:
+            self._linha(f"{exc}\n", "erro")
+            return
+
+        # O instalador não consegue substituir ficheiros que este processo
+        # tenha abertos: sair é parte da actualização, não uma consequência.
+        app.shutdown()
+
+    def _actualizar_do_git(self) -> None:
+        """Traz o código novo, instala dependências se precisar."""
         try:
             antes = self._git("rev-parse", "HEAD")
             self._linha("\n⟳  git pull...\n")
@@ -216,8 +306,7 @@ class Painel:
 
             depois = self._git("rev-parse", "HEAD")
             if not antes or antes == depois:
-                if not automatico:
-                    self._linha("Já estava actualizado.\n")
+                self._linha("Já estava actualizado.\n")
                 return
 
             alterados = self._git("diff", "--name-only", antes, depois).splitlines()
@@ -244,7 +333,7 @@ class Painel:
     def _git(self, *args: str) -> str:
         try:
             resultado = subprocess.run(
-                ["git", *args], cwd=str(RAIZ), capture_output=True, text=True,
+                ["git", *args], cwd=str(PASTA_TRABALHO), capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=30,
                 creationflags=CREATIONFLAGS,
             )
@@ -255,7 +344,7 @@ class Painel:
     def _executar(self, comando: list[str]) -> bool:
         try:
             processo = subprocess.Popen(
-                comando, cwd=str(RAIZ), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                comando, cwd=str(PASTA_TRABALHO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
                 creationflags=CREATIONFLAGS,
             )
@@ -587,7 +676,11 @@ def pagina_principal() -> None:
     ui.query("body").classes("bg-black")
 
     with ui.header().classes("items-center justify-between"):
-        ui.label("🤖 Assistente — Painel de Controlo").classes("text-lg font-bold")
+        with ui.row().classes("items-baseline gap-2"):
+            ui.label("🤖 Assistente — Painel de Controlo").classes("text-lg font-bold")
+            # A versão à vista: sem ela, «carregue em Actualizar» não tem
+            # como ser verificado por quem está a olhar para a janela.
+            ui.label(f"v{versao.VERSAO}").classes("text-xs text-grey")
         estado_widget = ui.label("⬤ Desligado").classes("text-lg font-bold text-grey")
 
     with ui.row().classes("w-full px-4 pt-4 gap-2"):
@@ -596,7 +689,7 @@ def pagina_principal() -> None:
         btn_parar.set_enabled(False)
         ui.button("⟳ Actualizar agora",
                    on_click=lambda: threading.Thread(
-                       target=painel.verificar_actualizacoes, args=(False,), daemon=True
+                       target=painel.actualizar, daemon=True
                    ).start())
         ui.button("👥 Utilizadores", on_click=lambda: tabs.set_value("utilizadores"))
         ui.button("🔑 Credenciais", on_click=lambda: tabs.set_value("credenciais"))
@@ -614,7 +707,7 @@ def pagina_principal() -> None:
                 "w-full h-96 bg-grey-10 font-mono text-sm"
             )
             log_widget.push("Painel pronto. Carregue em «Ligar» para arrancar o assistente.")
-            if not PYTHON.exists():
+            if not CONGELADO and not PYTHON.exists():
                 comando_criar = (
                     "python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt"
                     if EM_WINDOWS else
@@ -660,20 +753,24 @@ def pagina_principal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Actualização automática
+# Arranque
 # ---------------------------------------------------------------------------
-async def _ciclo_auto_actualizacao() -> None:
-    # Espera antes da primeira verificação para não competir com o arranque
-    # da própria interface.
+async def _verificar_versao_uma_vez() -> None:
+    """Uma verificação, no arranque, que só escreve na consola.
+
+    Já houve aqui um ciclo que actualizava sozinho de 6 em 6 horas. Foi
+    removido de propósito: actualizar é uma decisão de quem usa o programa,
+    não do programa. Isto pergunta, avisa e cala-se.
+    """
+    # Espera para não competir com o arranque da própria interface — e para a
+    # linha do aviso não aparecer antes de a consola existir para a mostrar.
     await asyncio.sleep(20)
-    while True:
-        await asyncio.to_thread(painel.verificar_actualizacoes, True)
-        await asyncio.sleep(INTERVALO_AUTO_ACTUALIZACAO_HORAS * 3600)
+    await asyncio.to_thread(painel.procurar_versao_nova)
 
 
 @app.on_startup
 def _ao_arrancar() -> None:
-    asyncio.create_task(_ciclo_auto_actualizacao())
+    asyncio.create_task(_verificar_versao_uma_vez())
     # Em modo nativo é o próprio `ui.run(native=True)` que abre a janela —
     # abrir também o navegador seria a mais.
     if not MODO_NATIVO and os.environ.get("PAINEL_ABRIR_NAVEGADOR", "1") == "1":
